@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,7 +15,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
-	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"go.mongodb.org/mongo-driver/mongo"
@@ -202,4 +202,13 @@ func handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"success":true,"message":"Session deleted"}`)
+}
+
+// Dummy functions - add your actual implementation
+func handler(c *whatsmeow.Client, evt interface{}) {
+	// Add your event handler logic here
+}
+
+func loadDataFromMongo() {
+	// Add your MongoDB data loading logic here
 }
