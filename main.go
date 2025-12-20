@@ -33,7 +33,6 @@ var (
 	wsClients = make(map[*websocket.Conn]bool)
 )
 
-// MongoDB Setup
 func initMongoDB() {
 	uri := "mongodb://mongo:AEvrikOWlrmJCQrDTQgfGtqLlwhwLuAA@crossover.proxy.rlwy.net:29609"
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -52,10 +51,8 @@ func initMongoDB() {
 func main() {
 	fmt.Println("🚀 IMPOSSIBLE BOT | START")
 
-	// Initialize MongoDB FIRST
 	initMongoDB()
 
-	// Database setup
 	dbURL := os.Getenv("DATABASE_URL")
 	dbType := "postgres"
 	if dbURL == "" {
@@ -70,27 +67,19 @@ func main() {
 		log.Fatalf("DB error: %v", err)
 	}
 
-	// Get device
 	deviceStore, err := container.GetFirstDevice(context.Background())
 	if err != nil {
 		log.Fatalf("Device error: %v", err)
 	}
 
-	// Create client
 	client = whatsmeow.NewClient(deviceStore, waLog.Stdout("Client", "INFO", true))
-	client.AddEventHandler(func(evt interface{}) {
-		handler(client, evt)
-	})
+	
+	SetGlobalClient(client)
+	client.AddEventHandler(handler)
 
-	// ════════════════════════════════════════════════════════════
-	// 🔐 INITIALIZE LID SYSTEM (CRITICAL - RUNS AUTOMATICALLY)
-	// ════════════════════════════════════════════════════════════
 	InitLIDSystem()
-
-	// Load data from MongoDB
 	loadDataFromMongo()
 
-	// Connect if session exists
 	if client.Store.ID != nil {
 		err = client.Connect()
 		if err != nil {
@@ -102,7 +91,6 @@ func main() {
 		fmt.Println("⏳ No session - use web interface to pair")
 	}
 
-	// HTTP Server Routes
 	http.HandleFunc("/", serveHTML)
 	http.HandleFunc("/pic.png", servePicture)
 	http.HandleFunc("/ws", handleWebSocket)
@@ -122,7 +110,6 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
@@ -134,17 +121,14 @@ func main() {
 	fmt.Println("👋 Goodbye!")
 }
 
-// Serve HTML page
 func serveHTML(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, "web/index.html")
 }
 
-// Serve picture
 func servePicture(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, "pic.png")
 }
 
-// WebSocket Handler
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -156,14 +140,12 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	wsClients[conn] = true
 	defer delete(wsClients, conn)
 
-	// Send initial status
 	status := map[string]interface{}{
 		"connected": client != nil && client.IsConnected(),
 		"session":   client != nil && client.Store.ID != nil,
 	}
 	conn.WriteJSON(status)
 
-	// Keep connection alive
 	for {
 		_, _, err := conn.ReadMessage()
 		if err != nil {
@@ -172,14 +154,12 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Broadcast to all WebSocket clients
 func broadcastWS(data interface{}) {
 	for conn := range wsClients {
 		conn.WriteJSON(data)
 	}
 }
 
-// API Handler - POST /api/pair
 func handlePairAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, `{"error":"Method not allowed"}`, 405)
@@ -209,14 +189,14 @@ func handlePairAPI(w http.ResponseWriter, r *http.Request) {
 
 	if client != nil && client.IsConnected() {
 		client.Disconnect()
-		time.Sleep(2 * time.Second)
+		time.Sleep(10 * time.Second)
 	}
 
 	newDevice := container.NewDevice()
 	tempClient := whatsmeow.NewClient(newDevice, waLog.Stdout("Pairing", "INFO", true))
-	tempClient.AddEventHandler(func(evt interface{}) {
-		handler(tempClient, evt)
-	})
+	
+	SetGlobalClient(tempClient)
+	tempClient.AddEventHandler(handler)
 
 	err := tempClient.Connect()
 	if err != nil {
@@ -224,7 +204,7 @@ func handlePairAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(10 * time.Second)
 
 	code, err := tempClient.PairPhone(
 		context.Background(),
@@ -242,7 +222,6 @@ func handlePairAPI(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Printf("✅ Code: %s\n", code)
 
-	// Broadcast to WebSocket
 	broadcastWS(map[string]interface{}{
 		"event": "pairing_code",
 		"code":  code,
@@ -255,9 +234,6 @@ func handlePairAPI(w http.ResponseWriter, r *http.Request) {
 				fmt.Println("✅ Paired!")
 				client = tempClient
 				
-				// ════════════════════════════════════════════════════════
-				// 🔄 EXTRACT LID FOR NEW PAIRING (AUTOMATIC)
-				// ════════════════════════════════════════════════════════
 				OnNewPairing(client)
 				
 				broadcastWS(map[string]interface{}{
@@ -274,7 +250,6 @@ func handlePairAPI(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"success":true,"code":"%s"}`, code)
 }
 
-// Legacy API Handler - GET /link/pair/NUMBER
 func handlePairAPILegacy(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 4 {
@@ -296,14 +271,14 @@ func handlePairAPILegacy(w http.ResponseWriter, r *http.Request) {
 
 	if client != nil && client.IsConnected() {
 		client.Disconnect()
-		time.Sleep(2 * time.Second)
+		time.Sleep(10 * time.Second)
 	}
 
 	newDevice := container.NewDevice()
 	tempClient := whatsmeow.NewClient(newDevice, waLog.Stdout("Pairing", "INFO", true))
-	tempClient.AddEventHandler(func(evt interface{}) {
-		handler(tempClient, evt)
-	})
+	
+	SetGlobalClient(tempClient)
+	tempClient.AddEventHandler(handler)
 
 	err := tempClient.Connect()
 	if err != nil {
@@ -311,7 +286,7 @@ func handlePairAPILegacy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(10 * time.Second)
 
 	code, err := tempClient.PairPhone(
 		context.Background(),
@@ -336,7 +311,6 @@ func handlePairAPILegacy(w http.ResponseWriter, r *http.Request) {
 				fmt.Println("✅ Paired!")
 				client = tempClient
 				
-				// Extract LID for new pairing
 				OnNewPairing(client)
 				
 				return
