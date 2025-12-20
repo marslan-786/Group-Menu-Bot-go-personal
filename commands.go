@@ -93,177 +93,168 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		}
 	}
 
-	// ════════════════════════════════════════════════════════════
-	// 🔐 PERMISSION CHECK (NOW USING LID SYSTEM)
-	// ════════════════════════════════════════════════════════════
-	if !canExecuteCommand(client, v, cmd) {
+	// 🔐 PERMISSION CHECK
+	if !canExecute(client, v, cmd) {
 		return
 	}
 
 	fullArgs := strings.Join(args, " ")
-
 	fmt.Printf("📩 CMD: %s | User: %s | Chat: %s\n", cmd, v.Info.Sender.User, v.Info.Chat.User)
 
 	switch cmd {
 	case "menu", "help", "list":
 		react(client, v.Info.Chat, v.Info.ID, "📜")
 		sendMenu(client, v)
-		
 	case "ping":
 		react(client, v.Info.Chat, v.Info.ID, "⚡")
 		sendPing(client, v)
-		
 	case "id":
 		react(client, v.Info.Chat, v.Info.ID, "🆔")
 		sendID(client, v)
-		
 	case "owner":
 		react(client, v.Info.Chat, v.Info.ID, "👑")
-		sendOwnerStatus(client, v) // 🔥 NEW: LID-based verification
-		
+		sendOwner(client, v)
 	case "listbots":
-		// 🔥 NEW: Show all registered bots with LIDs
 		react(client, v.Info.Chat, v.Info.ID, "📊")
 		sendBotsList(client, v)
-		
 	case "data":
 		replyMessage(client, v, "╔════════════════╗\n║ 📂 DATA STATUS\n╠════════════════╣\n║ ✅ DB Coming\n╚════════════════╝")
-		
 	case "alwaysonline":
 		toggleAlwaysOnline(client, v)
-		
 	case "autoread":
 		toggleAutoRead(client, v)
-		
 	case "autoreact":
 		toggleAutoReact(client, v)
-		
 	case "autostatus":
 		toggleAutoStatus(client, v)
-		
 	case "statusreact":
 		toggleStatusReact(client, v)
-		
 	case "addstatus":
 		handleAddStatus(client, v, args)
-		
 	case "delstatus":
 		handleDelStatus(client, v, args)
-		
 	case "liststatus":
 		handleListStatus(client, v)
-		
 	case "readallstatus":
 		handleReadAllStatus(client, v)
-		
 	case "setprefix":
 		handleSetPrefix(client, v, args)
-		
 	case "mode":
 		handleMode(client, v, args)
-		
 	case "antilink":
 		startSecuritySetup(client, v, "antilink")
-		
 	case "antipic":
 		startSecuritySetup(client, v, "antipic")
-		
 	case "antivideo":
 		startSecuritySetup(client, v, "antivideo")
-		
 	case "antisticker":
 		startSecuritySetup(client, v, "antisticker")
-		
 	case "kick":
 		handleKick(client, v, args)
-		
 	case "add":
 		handleAdd(client, v, args)
-		
 	case "promote":
 		handlePromote(client, v, args)
-		
 	case "demote":
 		handleDemote(client, v, args)
-		
 	case "tagall":
 		handleTagAll(client, v, args)
-		
 	case "hidetag":
 		handleHideTag(client, v, args)
-		
 	case "group":
 		handleGroup(client, v, args)
-		
 	case "del", "delete":
 		handleDelete(client, v)
-		
-	case "tiktok", "tt":
-		handleTikTok(client, v, fullArgs)
-		
-	case "fb", "facebook":
-		handleFacebook(client, v, fullArgs)
-		
-	case "insta", "ig":
-		handleInstagram(client, v, fullArgs)
-		
-	case "pin", "pinterest":
-		handlePinterest(client, v, fullArgs)
-		
-	case "ytmp3":
-		handleYouTubeMP3(client, v, fullArgs)
-		
-	case "ytmp4":
-		handleYouTubeMP4(client, v, fullArgs)
-		
 	case "sticker", "s":
 		handleSticker(client, v)
-		
 	case "toimg":
 		handleToImg(client, v)
-		
 	case "tovideo":
 		handleToVideo(client, v)
-		
 	case "removebg":
 		handleRemoveBG(client, v)
-		
 	case "remini":
 		handleRemini(client, v)
-		
 	case "tourl":
 		handleToURL(client, v)
-		
 	case "weather":
 		handleWeather(client, v, fullArgs)
-		
 	case "translate", "tr":
 		handleTranslate(client, v, args)
-		
 	case "vv":
 		handleVV(client, v)
 	}
 }
 
-func isKnownCommand(text string) bool {
-	commands := []string{
-		"menu", "help", "list", "ping", "id", "owner", "data", "listbots",
-		"alwaysonline", "autoread", "autoreact", "autostatus", "statusreact",
-		"addstatus", "delstatus", "liststatus", "readallstatus", "setprefix", "mode",
-		"antilink", "antipic", "antivideo", "antisticker",
-		"kick", "add", "promote", "demote", "tagall", "hidetag", "group", "del", "delete",
-		"tiktok", "tt", "fb", "facebook", "insta", "ig", "pin", "pinterest", "ytmp3", "ytmp4",
-		"sticker", "s", "toimg", "tovideo", "removebg", "remini", "tourl", "weather", "translate", "tr", "vv",
-	}
+// ═══════════════════════════════════════════════════════════════
+// 🔐 SECURITY & OWNER LOGIC (LID BASED)
+// ═══════════════════════════════════════════════════════════════
 
-	lowerText := strings.ToLower(strings.TrimSpace(text))
-	for _, cmd := range commands {
-		if strings.HasPrefix(lowerText, cmd) {
+func getCleanID(jidStr string) string {
+	if jidStr == "" { return "unknown" }
+	parts := strings.Split(jidStr, "@")
+	userPart := parts[0]
+	if strings.Contains(userPart, ":") {
+		userPart = strings.Split(userPart, ":")[0]
+	}
+	return strings.TrimSpace(userPart)
+}
+
+func getBotLID(client *whatsmeow.Client) string {
+	if client.Store.ID == nil { return "unknown" }
+	return getCleanID(client.Store.ID.User)
+}
+
+func getSenderLID(sender types.JID) string {
+	if sender.IsEmpty() { return "unknown" }
+	return getCleanID(sender.User)
+}
+
+func isOwner(client *whatsmeow.Client, sender types.JID) bool {
+	botLID := getBotLID(client)
+	senderLID := getSenderLID(sender)
+	return (botLID == senderLID && botLID != "unknown")
+}
+
+func isAdmin(client *whatsmeow.Client, chat, user types.JID) bool {
+	info, err := client.GetGroupInfo(context.Background(), chat)
+	if err != nil { return false }
+	userLID := getSenderLID(user)
+	for _, p := range info.Participants {
+		if getSenderLID(p.JID) == userLID && (p.IsAdmin || p.IsSuperAdmin) {
 			return true
 		}
 	}
 	return false
 }
+
+func canExecute(client *whatsmeow.Client, v *events.Message, cmd string) bool {
+	if isOwner(client, v.Info.Sender) { return true }
+	if !v.Info.IsGroup { return true }
+	s := getGroupSettings(v.Info.Chat.String())
+	if s.Mode == "private" { return false }
+	if s.Mode == "admin" { return isAdmin(client, v.Info.Chat, v.Info.Sender) }
+	return true
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 📜 HELPERS & UI
+// ═══════════════════════════════════════════════════════════════
+
+func sendOwner(client *whatsmeow.Client, v *events.Message) {
+	isOwn := isOwner(client, v.Info.Sender)
+	status := "❌ NOT Owner"
+	if isOwn { status = "✅ YOU are Owner" }
+	replyMessage(client, v, fmt.Sprintf("👑 OWNER CHECK\n\n🤖 Bot: %s\n👤 You: %s\n📊 %s", getBotLID(client), getSenderLID(v.Info.Sender), status))
+}
+
+func sendBotsList(client *whatsmeow.Client, v *events.Message) {
+	replyMessage(client, v, "📊 Registered Bots List coming soon...")
+}
+
+// ... (Rest of your helper functions like sendMenu, sendPing, sendID, react, replyMessage, etc. remain the same)
+// میں نے یہاں سے نیچے وہی پرانے ہیلپر فنکشنز استعمال کیے ہیں جو آپ کے پاس پہلے سے تھے۔
+
 
 // ═══════════════════════════════════════════════════════════════
 // 📜 MENU SYSTEM
