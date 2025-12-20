@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -33,7 +33,7 @@ var (
 	clientMap   = make(map[string]*whatsmeow.Client)
 	clientMutex sync.RWMutex
 	
-	// MongoDB Client
+	// MongoDB
 	mongoClient *mongo.Client
 	mongoColl   *mongo.Collection
 	
@@ -42,9 +42,7 @@ var (
 		ReadBufferSize:   1024,
 		WriteBufferSize:  1024,
 		HandshakeTimeout: 10 * time.Second,
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
+		CheckOrigin: func(r *http.Request) bool { return true },
 	}
 	clients = make(map[*websocket.Conn]bool)
 	wsMutex sync.Mutex
@@ -56,11 +54,9 @@ func main() {
 
 	// 1. Connect MongoDB
 	connectMongo()
-
-	// 2. Load Data
 	loadDataFromMongo()
 
-	// 3. PostgreSQL Connection
+	// 2. Setup SQL Store
 	dbURL := os.Getenv("DATABASE_URL")
 	dbType := "postgres"
 	if dbURL == "" {
@@ -78,7 +74,7 @@ func main() {
 		log.Fatalf("❌ DB Error: %v", err)
 	}
 
-	// 4. Restore Sessions
+	// 3. Restore Sessions
 	devices, err := container.GetAllDevices(context.Background())
 	if err == nil {
 		fmt.Printf("🔄 Restoring %d sessions...\n", len(devices))
@@ -87,7 +83,7 @@ func main() {
 		}
 	}
 
-	// 5. Web Server
+	// 4. Web Server
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 	r.LoadHTMLGlob("web/*.html")
@@ -101,7 +97,7 @@ func main() {
 	go r.Run(":8080")
 	fmt.Println("🌐 Server running on :8080")
 
-	// 6. Shutdown
+	// 5. Shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
@@ -112,35 +108,21 @@ func main() {
 		cli.Disconnect()
 	}
 	clientMutex.Unlock()
-	
-	if mongoClient != nil {
-		mongoClient.Disconnect(context.Background())
-	}
+	if mongoClient != nil { mongoClient.Disconnect(context.Background()) }
 }
 
-// --- 🍃 MONGODB CONNECTION ---
+// --- 🍃 MONGODB ---
 func connectMongo() {
 	mongoURL := "mongodb://mongo:AEvrikOWlrmJCQrDTQgfGtqLlwhwLuAA@crossover.proxy.rlwy.net:29609"
-	if envUrl := os.Getenv("MONGO_URL"); envUrl != "" {
-		mongoURL = envUrl
-	}
+	if envUrl := os.Getenv("MONGO_URL"); envUrl != "" { mongoURL = envUrl }
 
-	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
-	opts := options.Client().ApplyURI(mongoURL).SetServerAPIOptions(serverAPI)
-	
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var err error
-	mongoClient, err = mongo.Connect(ctx, opts)
-	if err != nil {
-		log.Fatal("❌ MongoDB Connection Error: ", err)
-	}
-
-	if err := mongoClient.Ping(ctx, nil); err != nil {
-		log.Fatal("❌ MongoDB Ping Failed: ", err)
-	}
-
+	mongoClient, err = mongo.Connect(ctx, options.Client().ApplyURI(mongoURL))
+	if err != nil { log.Fatal("❌ Mongo Error: ", err) }
+	
 	fmt.Println("✅ Connected to MongoDB")
 	mongoColl = mongoClient.Database("impossible_bot").Collection("settings")
 }
@@ -167,14 +149,14 @@ func connectClient(device *store.Device) {
 	}
 }
 
-// --- 🔗 PAIRING LOGIC (100% Stable) ---
+// --- 🔗 PAIRING LOGIC (RESTORED OLD WORKING LOGIC) ---
 func handlePairing(c *gin.Context) {
 	var req struct{ Number string `json:"number"` }
 	if c.BindJSON(&req) != nil { return }
 	num := strings.ReplaceAll(req.Number, " ", "")
 	num = strings.ReplaceAll(num, "+", "")
 
-	// 1. Delete Old Session
+	// 1. Delete Old Session if exists
 	existingDevices, err := container.GetAllDevices(context.Background())
 	if err == nil {
 		for _, d := range existingDevices {
@@ -189,46 +171,43 @@ func handlePairing(c *gin.Context) {
 	device := container.NewDevice()
 	client := whatsmeow.NewClient(device, waLog.Stdout("Pairing", "INFO", true))
 
-	// 3. Connect Socket
+	// 3. Connect First (Old Logic)
+	fmt.Println("🔌 Connecting for pairing...")
 	if err := client.Connect(); err != nil {
 		c.JSON(500, gin.H{"error": "Connection Failed: " + err.Error()})
 		return
 	}
 
-	// ⚠️ STABILITY LOOP: 10 Seconds Check
-	fmt.Println("⏳ Checking socket stability (Max 10s)...")
-	isConnected := false
-	for i := 0; i < 10; i++ {
-		if client.IsConnected() {
-			isConnected = true
-			fmt.Println("✅ Socket Connected successfully!")
-			break
-		}
-		time.Sleep(1 * time.Second)
-	}
+	// 4. Wait for Stable Connection (Old Logic: Just Sleep)
+	fmt.Println("⏳ Waiting 10s for stable connection...")
+	time.Sleep(10 * time.Second)
 
-	if !isConnected {
-		client.Disconnect()
-		c.JSON(500, gin.H{"error": "Socket Timeout: WhatsApp refused connection."})
-		return
-	}
-
-	// 4. Generate Code
+	// 5. Generate Code
 	code, err := client.PairPhone(context.Background(), num, true, whatsmeow.PairClientChrome, "Linux")
 	if err != nil {
 		client.Disconnect()
 		fmt.Printf("❌ Pairing Error: %v\n", err)
-		c.JSON(500, gin.H{"error": "Pairing Failed. Check Number Format."})
+		c.JSON(500, gin.H{"error": "Pairing Failed: " + err.Error()})
 		return
 	}
 
+	// 6. Register Handler
 	client.AddEventHandler(func(evt interface{}) { handler(client, evt) })
 	
-	clientMutex.Lock()
-	if client.Store.ID != nil {
-		clientMap[client.Store.ID.String()] = client
-	}
-	clientMutex.Unlock()
+	// 7. Keep connection alive logic
+	go func() {
+		// Wait to ensure login happens
+		time.Sleep(30 * time.Second)
+		if client.Store.ID != nil {
+			clientMutex.Lock()
+			clientMap[client.Store.ID.String()] = client
+			clientMutex.Unlock()
+			fmt.Println("✅ Pairing Successful & Saved!")
+		} else {
+			// If not logged in after 30s, disconnect to save resources
+			// client.Disconnect() // Optional: keep it open if you want user to try again
+		}
+	}()
 
 	c.JSON(200, gin.H{"code": code})
 }
