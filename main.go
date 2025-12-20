@@ -25,19 +25,20 @@ import (
 var client *whatsmeow.Client
 var container *sqlstore.Container
 
-// بوٹ کی مخصوص شناخت اور ڈویلپر کا نام
-const BOT_TAG = "IMPOSSIBLE_V1"
+const BOT_TAG = "IMPOSSIBLE_MENU_V2"
 const DEVELOPER = "Nothing Is Impossible"
 
 func main() {
-	fmt.Printf("🚀 [%s] Starting Go Engine...\n", BOT_TAG)
+	fmt.Printf("🚀 [%s] Starting Ultimate Go Engine...\n", BOT_TAG)
 
 	dbURL := os.Getenv("DATABASE_URL")
 	dbType := "postgres"
 	if dbURL == "" { dbType = "sqlite3"; dbURL = "file:impossible.db?_foreign_keys=on" }
 
-	container, _ = sqlstore.New(context.Background(), dbType, dbURL, waLog.Stdout("Database", "INFO", true))
-	
+	var err error
+	container, err = sqlstore.New(context.Background(), dbType, dbURL, waLog.Stdout("Database", "INFO", true))
+	if err != nil { panic(err) }
+
 	// سیشن آئسولیشن لاجک
 	var targetDevice *store.Device
 	devices, _ := container.GetAllDevices(context.Background())
@@ -49,6 +50,7 @@ func main() {
 	}
 
 	if targetDevice == nil {
+		fmt.Println("ℹ️ [Auth] No session found. Waiting for pairing...")
 		targetDevice = container.NewDevice()
 		targetDevice.PushName = BOT_TAG
 	}
@@ -60,6 +62,7 @@ func main() {
 
 	port := os.Getenv("PORT")
 	if port == "" { port = "8080" }
+	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
 	r.StaticFile("/", "./web/index.html")
 	r.POST("/api/pair", handlePairAPI)
@@ -85,60 +88,91 @@ func eventHandler(evt interface{}) {
 		if v.Info.IsFromMe { return }
 		body := strings.TrimSpace(strings.ToLower(getBody(v.Message)))
 		
-		fmt.Printf("📩 [Message] From: %s | Text: %s\n", v.Info.Sender.User, body)
+		fmt.Printf("📩 [MSG] From: %s | Text: %s\n", v.Info.Sender.User, body)
 
-		// مینیو کمانڈ
+		// ہیش مینیو کمانڈ
 		if body == "#menu" {
 			_, _ = client.SendMessage(context.Background(), v.Info.Chat, client.BuildReaction(v.Info.Chat, v.Info.Sender, v.Info.ID, "📜"))
-			sendImpossibleMenu(v.Info.Chat)
+			sendInteractiveMenu(v.Info.Chat)
 		}
 
-		// پنگ کمانڈ (اسپیڈ ٹیسٹ)
+		// ہیش پنگ کمانڈ
 		if body == "#ping" {
 			start := time.Now()
 			_, _ = client.SendMessage(context.Background(), v.Info.Chat, client.BuildReaction(v.Info.Chat, v.Info.Sender, v.Info.ID, "⚡"))
 			latency := time.Since(start)
 			
-			res := fmt.Sprintf("🚀 *Impossible Speed:* %s\n\n_© Developed by %s_", latency.String(), DEVELOPER)
+			res := fmt.Sprintf("🚀 *IMPOSSIBLE SPEED*\n\nLatency: `%s`\nDeveloper: _%s_", latency.String(), DEVELOPER)
 			client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{Conversation: proto.String(res)})
 		}
 	}
 }
 
-func sendImpossibleMenu(chat types.JID) {
-	fmt.Println("📤 [Action] Sending Advanced List Menu...")
+// چیٹ جی پی ٹی کے مشورے کے مطابق انٹیریکٹو مینیو بٹن
+func sendInteractiveMenu(chat types.JID) {
+	fmt.Println("📤 [Action] Sending Interactive OpenMenu Button...")
 
-	// جدید واٹس ایپ بٹن سٹرکچر
-	listMsg := &waProto.ListMessage{
-		Title:       proto.String("IMPOSSIBLE MENU"),
-		Description: proto.String("Hi! Select an option below to explore bot commands."),
-		ButtonText:  proto.String("OPEN TOOLS"),
-		ListType:    waProto.ListMessage_SINGLE_SELECT.Enum(),
-		Sections: []*waProto.ListMessage_Section{
-			{
-				Title: proto.String("SYSTEM TOOLS"),
-				Rows: []*waProto.ListMessage_Row{
-					{Title: proto.String("Ping Status"), RowID: proto.String("ping"), Description: proto.String("Check latency speed")},
-					{Title: proto.String("My WhatsApp ID"), RowID: proto.String("id")},
+	// یہ وہ اسٹرکچر ہے جو واٹس ایپ کے نئے ورژن میں "Open Menu" دکھاتا ہے
+	interactiveMsg := &waProto.InteractiveMessage{
+		Header: &waProto.InteractiveMessage_Header{
+			Title: proto.String("IMPOSSIBLE MENU"),
+		},
+		Body: &waProto.InteractiveMessage_Body{
+			Text: proto.String("نیچے دیے گئے بٹن پر کلک کر کے آپشنز دیکھیں 👇"),
+		},
+		Footer: &waProto.InteractiveMessage_Footer{
+			Text: proto.String(DEVELOPER),
+		},
+		Action: &waProto.InteractiveMessage_Action{
+			Button: proto.String("Click to Open Menu"),
+			Sections: []*waProto.InteractiveMessage_Section{
+				{
+					Title: proto.String("MAIN TOOLS"),
+					Rows: []*waProto.InteractiveMessage_Row{
+						{
+							Id:          proto.String("ping_id"),
+							Title:       proto.String("Check Ping"),
+							Description: proto.String("Get bot response time"),
+						},
+						{
+							Id:          proto.String("id_info"),
+							Title:       proto.String("My ID"),
+							Description: proto.String("Get your JID details"),
+						},
+					},
 				},
 			},
 		},
 	}
 
-	// بٹن بھیجنے کی کوشش
+	// میسج سینڈ کرنا
 	_, err := client.SendMessage(context.Background(), chat, &waProto.Message{
-		ListMessage: listMsg,
+		InteractiveMessage: interactiveMsg,
 	})
 
-	// اگر بٹن فیل ہو جائیں (Error 479) تو ٹیکسٹ مینیو خودکار طریقے سے جائے گا
 	if err != nil {
-		fmt.Printf("❌ [Error] Buttons failed. Sending backup text menu.\n")
-		backup := fmt.Sprintf("*📜 IMPOSSIBLE MENU*\n\n" +
-			"• #ping - Check Latency\n" +
-			"• #id - Get User ID\n\n" +
-			"_Developed by %s_", DEVELOPER)
-		client.SendMessage(context.Background(), chat, &waProto.Message{Conversation: proto.String(backup)})
+		fmt.Printf("❌ Interactive Error: %v. Using ListMessage Fallback.\n", err)
+		// اگر انٹرایکٹو فیل ہو جائے تو پرانا لسٹ میسج ٹرائی کریں
+		fallbackList(chat)
 	}
+}
+
+func fallbackList(chat types.JID) {
+	listMsg := &waProto.ListMessage{
+		Title:       proto.String("IMPOSSIBLE MENU"),
+		Description: proto.String("Please select an option:"),
+		ButtonText:  proto.String("OPEN MENU"),
+		ListType:    waProto.ListMessage_SINGLE_SELECT.Enum(),
+		Sections: []*waProto.ListMessage_Section{
+			{
+				Title: proto.String("FEATURES"),
+				Rows: []*waProto.ListMessage_Row{
+					{Title: proto.String("Ping"), RowId: proto.String("ping")},
+				},
+			},
+		},
+	}
+	client.SendMessage(context.Background(), chat, &waProto.Message{ListMessage: listMsg})
 }
 
 func handlePairAPI(c *gin.Context) {
@@ -146,7 +180,7 @@ func handlePairAPI(c *gin.Context) {
 	c.BindJSON(&req)
 	num := strings.ReplaceAll(req.Number, "+", "")
 
-	// سیشن کلین اپ
+	// صرف اپنا متعلقہ سیشن صاف کریں
 	devices, _ := container.GetAllDevices(context.Background())
 	for _, dev := range devices {
 		if dev.PushName == BOT_TAG {
