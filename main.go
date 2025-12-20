@@ -21,7 +21,7 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
-	
+
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"google.golang.org/protobuf/proto"
 )
@@ -62,13 +62,13 @@ func main() {
 	// ------------------- DEVICE SETUP -------------------
 	var device *store.Device
 	devices, _ := container.GetAllDevices(context.Background())
-	
+
 	// Get the most recent device (last paired)
 	if len(devices) > 0 {
 		device = devices[len(devices)-1]
 		fmt.Printf("📱 Found existing device: %s\n", device.PushName)
 	}
-	
+
 	if device == nil {
 		device = container.NewDevice()
 		device.PushName = BOT_TAG
@@ -95,22 +95,17 @@ func main() {
 	// ------------------- WEB SERVER -------------------
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
-	
-	// Check if web folder exists, if not use default handling
+
+	// Check if web folder exists
 	if _, err := os.Stat("web"); !os.IsNotExist(err) {
 		r.LoadHTMLGlob("web/*.html")
-		r.Static("/pic.png", "./web/pic.png")
-	}
-	
-	// Try serving from root if not in web folder
-	if _, err := os.Stat("pic.png"); !os.IsNotExist(err) {
-		r.StaticFile("/pic.png", "./pic.png")
+		r.Static("/static", "./web")
 	}
 
 	// Home page
 	r.GET("/", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "index.html", gin.H{
-			"paired": client.Store.ID != nil,
+			"paired": client != nil && client.Store.ID != nil,
 		})
 	})
 
@@ -121,16 +116,20 @@ func main() {
 	fmt.Println("🌐 Web server running on port 8080")
 
 	// ------------------- GRACEFUL SHUTDOWN -------------------
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	<-c
-	client.Disconnect()
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
+	
+	fmt.Println("\n🛑 Shutting down...")
+	if client != nil && client.IsConnected() {
+		client.Disconnect()
+	}
+	fmt.Println("👋 Goodbye!")
 }
 
 // ================= EVENTS =================
 
 func eventHandler(evt interface{}) {
-	// FIX: Use v directly or ignore if not needed, handled type switch correctly
 	switch v := evt.(type) {
 	case *events.Message:
 		if v.Info.IsFromMe {
@@ -138,7 +137,7 @@ func eventHandler(evt interface{}) {
 		}
 
 		text := strings.ToLower(strings.TrimSpace(getText(v.Message)))
-		
+
 		fmt.Printf("📩 Msg: %s | From: %s\n", text, v.Info.Sender.User)
 
 		// Handle text commands
@@ -150,7 +149,7 @@ func eventHandler(evt interface{}) {
 		case "#info", "info":
 			sendInfo(v.Info.Chat)
 		}
-	
+
 	case *events.Connected:
 		fmt.Println("🟢 BOT CONNECTED")
 	case *events.Disconnected:
@@ -178,44 +177,81 @@ func sendMenu(chat types.JID) {
 ║  🚀 IMPOSSIBLE BOT
 ║  📋 MAIN MENU
 ╠════════════════════╣
-║ ⚡ *#ping*
-║ ℹ️ *#info*
-║ 📋 *#menu*
+║
+║  ⚡ *#ping*
+║     Check bot speed
+║
+║  ℹ️ *#info*
+║     Bot information
+║
+║  📋 *#menu*
+║     Show this menu
+║
+╠════════════════════╣
+║  👨‍💻 Developer:
+║  Nothing Is Impossible
 ╚════════════════════╝`
 
 	client.SendMessage(context.Background(), chat, &waProto.Message{
 		Conversation: proto.String(menuText),
 	})
+	fmt.Println("✅ Menu sent")
 }
 
 // ================= PING =================
 
 func sendPing(chat types.JID) {
 	start := time.Now()
-	// Fake latency for effect
-	time.Sleep(50 * time.Millisecond) 
+	time.Sleep(20 * time.Millisecond)
 	ms := time.Since(start).Milliseconds()
 	uptime := time.Since(startTime).Round(time.Second)
 
-	msg := fmt.Sprintf("⚡ PONG: %dms\n⏱ Uptime: %s", ms, uptime)
+	msg := fmt.Sprintf(
+		"╔══════════════════╗\n"+
+			"║ 🚀 IMPOSSIBLE BOT\n"+
+			"╠══════════════════╣\n"+
+			"║ 👨‍💻 %s\n"+
+			"╠══════════════════╣\n"+
+			"║ ⚡ PING: %d ms\n"+
+			"╠══════════════════╣\n"+
+			"║ ⏱ UPTIME: %s\n"+
+			"╚══════════════════╝",
+		DEV_NAME,
+		ms,
+		uptime,
+	)
 
 	client.SendMessage(context.Background(), chat, &waProto.Message{
 		Conversation: proto.String(msg),
 	})
+	fmt.Println("✅ Ping sent")
 }
 
 // ================= INFO =================
 
 func sendInfo(chat types.JID) {
 	uptime := time.Since(startTime).Round(time.Second)
-	msg := fmt.Sprintf("🤖 IMPOSSIBLE BOT v4\n👨‍💻 Dev: %s\n⏱ Uptime: %s", DEV_NAME, uptime)
+
+	msg := fmt.Sprintf(
+		"╔══════════════════╗\n"+
+			"║ 🤖 BOT INFO\n"+
+			"╠══════════════════╣\n"+
+			"║ 📛 IMPOSSIBLE BOT\n"+
+			"║ 👨‍💻 %s\n"+
+			"║ ⏱ UPTIME: %s\n"+
+			"║ 🏷 VERSION: 1.0\n"+
+			"╚══════════════════╝",
+		DEV_NAME,
+		uptime,
+	)
 
 	client.SendMessage(context.Background(), chat, &waProto.Message{
 		Conversation: proto.String(msg),
 	})
+	fmt.Println("✅ Info sent")
 }
 
-// ================= PAIR API (YOUR LOGIC) =================
+// ================= PAIR API =================
 
 func handlePairAPI(c *gin.Context) {
 	var req struct {
@@ -226,17 +262,31 @@ func handlePairAPI(c *gin.Context) {
 		return
 	}
 
+	// Clean phone number
 	number := strings.ReplaceAll(req.Number, "+", "")
+	number = strings.ReplaceAll(number, " ", "")
+	number = strings.ReplaceAll(number, "-", "")
 	number = strings.TrimSpace(number)
+
+	// Validate number
+	if len(number) < 10 || len(number) > 15 {
+		c.JSON(400, gin.H{"error": "Invalid phone number length"})
+		return
+	}
+
+	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("📱 NEW PAIRING REQUEST\n")
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("📞 Number: %s\n", number)
 
 	// Create NEW device for this pairing
 	newDevice := container.NewDevice()
 	newDevice.PushName = BOT_TAG
-	
+
 	// Create temporary client for pairing
 	tempClient := whatsmeow.NewClient(newDevice, waLog.Stdout("Pairing", "INFO", true))
-	
-	fmt.Println("🔌 Connecting for pairing...")
+
+	fmt.Println("🔌 Connecting to WhatsApp...")
 	err := tempClient.Connect()
 	if err != nil {
 		fmt.Printf("❌ Connection failed: %v\n", err)
@@ -244,9 +294,16 @@ func handlePairAPI(c *gin.Context) {
 		return
 	}
 
-	// Wait for stable connection (YOUR LOGIC)
-	fmt.Println("⏳ Waiting 5s for socket stability...")
-	time.Sleep(5 * time.Second)
+	// CRITICAL: Wait for connection to stabilize
+	fmt.Println("⏳ Waiting for stable connection...")
+	time.Sleep(3 * time.Second)
+
+	// Check if still connected
+	if !tempClient.IsConnected() {
+		fmt.Println("❌ Connection lost before pairing")
+		c.JSON(500, gin.H{"error": "Connection unstable"})
+		return
+	}
 
 	fmt.Printf("📱 Generating pairing code for %s...\n", number)
 	code, err := tempClient.PairPhone(
@@ -254,9 +311,9 @@ func handlePairAPI(c *gin.Context) {
 		number,
 		true,
 		whatsmeow.PairClientChrome,
-		"Linux",
+		"Chrome (Linux)",
 	)
-	
+
 	if err != nil {
 		fmt.Printf("❌ Pairing failed: %v\n", err)
 		tempClient.Disconnect()
@@ -265,29 +322,41 @@ func handlePairAPI(c *gin.Context) {
 	}
 
 	fmt.Printf("✅ Code generated: %s\n", code)
-	
-	// Keep temp client connected until paired
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+
+	// Keep temp client alive and watch for successful pairing
 	go func() {
-		// Give user 60 seconds to pair
+		fmt.Println("⏳ Waiting for user to enter pairing code...")
+		
+		// Check every second for 60 seconds
 		for i := 0; i < 60; i++ {
+			time.Sleep(1 * time.Second)
+			
+			// Check if pairing completed
 			if tempClient.Store.ID != nil {
 				fmt.Println("✅ Pairing successful!")
+				fmt.Printf("📱 Device ID: %s\n", tempClient.Store.ID)
 				
-				// Disconnect old client
-				if client != nil {
+				// Disconnect old client if exists
+				if client != nil && client.IsConnected() {
+					fmt.Println("🔄 Disconnecting old session...")
 					client.Disconnect()
+					time.Sleep(1 * time.Second)
 				}
-				
-				// Swap clients
+
+				// Replace with new client
 				client = tempClient
 				client.AddEventHandler(eventHandler)
+				
+				fmt.Println("🎉 New session is now active!")
 				return
 			}
-			time.Sleep(1 * time.Second)
 		}
-		fmt.Println("❌ Pairing timed out")
+		
+		// Timeout after 60 seconds
+		fmt.Println("❌ Pairing timed out (user didn't enter code)")
 		tempClient.Disconnect()
 	}()
-	
+
 	c.JSON(200, gin.H{"code": code})
 }
