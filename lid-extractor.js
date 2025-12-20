@@ -1,10 +1,10 @@
 const { Client } = require('pg');
 const fs = require('fs');
 
-async function debugDatabaseStructure() {
-    console.log("\n" + "🔍".repeat(30));
-    console.log("🕵️‍♂️ [DATABASE DIAGNOSTIC] ڈیٹا بیس کا معائنہ شروع...");
-    console.log("🔍".repeat(30) + "\n");
+async function extractLidMaster() {
+    console.log("\n" + "╔" + "═".repeat(58) + "╗");
+    console.log("║" + " ".repeat(18) + "💎 LID MASTER EXTRACTOR 💎" + " ".repeat(14) + "║");
+    console.log("╚" + "═".repeat(58) + "╝");
 
     const client = new Client({
         connectionString: process.env.DATABASE_URL,
@@ -13,49 +13,59 @@ async function debugDatabaseStructure() {
 
     try {
         await client.connect();
-        console.log("✅ [CONNECTED] پوسٹ گریس سے رابطہ ہو گیا۔\n");
+        console.log("✅ [DATABASE] پوسٹ گریس کے ساتھ کنکشن قائم ہو گیا ہے۔");
 
-        // --- ٹیسٹ 1: whatsmeow_device ٹیبل کا کچا ڈیٹا ---
-        console.log("📊 [TEST 1] whatsmeow_device ٹیبل چیک کر رہے ہیں...");
-        const deviceRes = await client.query('SELECT * FROM whatsmeow_device LIMIT 5;');
-        console.log("Raw Output (Devices):", JSON.stringify(deviceRes.rows, null, 2));
+        // براہ راست ڈیوائس ٹیبل سے JID اور LID اٹھائیں
+        const query = 'SELECT jid, lid FROM whatsmeow_device;';
+        const res = await client.query(query);
 
-        // --- ٹیسٹ 2: ٹیبل کے کالمز کے نام چیک کرنا ---
-        console.log("\n📑 [TEST 2] ٹیبل کے کالمز کے اصل نام معلوم کر رہے ہیں...");
-        const columnsQuery = `
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name = 'whatsmeow_contacts';
-        `;
-        const colRes = await client.query(columnsQuery);
-        console.log("Contacts Table Columns:", colRes.rows.map(r => r.column_name).join(', '));
-
-        // --- ٹیسٹ 3: تمام `@lid` والی آئی ڈیز کا نمونہ ---
-        console.log("\n🆔 [TEST 3] ڈیٹا بیس میں موجود کوئی بھی 10 LID آئی ڈیز دکھائیں...");
-        // یہاں ہم کوشش کریں گے کہ کوئی بھی آئی ڈی ملے جو @lid پر ختم ہو
-        const sampleLids = await client.query("SELECT * FROM whatsmeow_contacts WHERE their_jid LIKE '%@lid' LIMIT 10;");
-        
-        if (sampleLids.rows.length > 0) {
-            console.log("Found Sample LIDs:", JSON.stringify(sampleLids.rows, null, 2));
-        } else {
-            console.log("❌ کوئی بھی @lid والی آئی ڈی نہیں ملی۔");
+        if (res.rows.length === 0) {
+            console.log("⚠️ [EMPTY] کوئی سیشن نہیں ملا۔ بوٹ پیئر کریں!");
+            process.exit(0);
         }
 
-        // --- ٹیسٹ 4: بوٹ کے اپنے نام سے ملتا جلتا ڈیٹا ---
-        console.log("\n👤 [TEST 4] بوٹ کے نمبر سے جڑا ہوا ڈیٹا تلاش کر رہے ہیں...");
-        const generalSearch = await client.query("SELECT * FROM whatsmeow_contacts LIMIT 20;");
-        console.log("First 20 Contacts (Summary):");
-        generalSearch.rows.forEach(r => {
-            console.log(`- JID: ${r.their_jid || r.jid} | Name: ${r.push_name || 'N/A'}`);
+        console.log(`📊 [FOUND] کل ${res.rows.length} سیشنز کا ڈیٹا ملا ہے۔\n`);
+        
+        let botData = {};
+
+        res.rows.forEach((row, index) => {
+            if (row.jid && row.lid) {
+                // ڈیٹا کو صاف کریں (ڈیوائس آئی ڈی ہٹائیں جیسے :61)
+                const purePhone = row.jid.split('@')[0].split(':')[0];
+                const pureLid = row.lid.split('@')[0].split(':')[0] + "@lid";
+
+                console.log(`  ╭────────────── [ BOT #${index + 1} ] ──────────────`);
+                console.log(`  │ 📱 فون نمبر : ${purePhone}`);
+                console.log(`  │ 🆔 اصل LID  : ${pureLid}`);
+                console.log(`  │ ✨ اسٹیٹس   : کامیابی سے محفوظ!`);
+                console.log(`  ╰───────────────────────────────────────────\n`);
+
+                // پرانا اسٹرکچر جو گو (Go) بوٹ کو چاہیے
+                botData[purePhone] = {
+                    phone: purePhone,
+                    lid: pureLid,
+                    extractedAt: new Date().toISOString()
+                };
+            }
         });
 
+        // فائل میں سیو کریں
+        const finalJson = {
+            timestamp: new Date().toISOString(),
+            count: Object.keys(botData).length,
+            bots: botData
+        };
+
+        fs.writeFileSync('./lid_data.json', JSON.stringify(finalJson, null, 2));
+        console.log("💾 [SUCCESS] سارا ڈیٹا 'lid_data.json' میں پش کر دیا گیا ہے۔");
+
     } catch (err) {
-        console.error("\n❌ [CRITICAL ERROR]:", err.message);
+        console.error("❌ [CRITICAL ERROR]:", err.message);
     } finally {
         await client.end();
-        console.log("\n🏁 [DIAGNOSTIC FINISHED] اب لاگز چیک کریں اور مجھے بتائیں کیا نظر آ رہا ہے۔");
+        console.log("\n🏁 [FINISHED] آپریشن مکمل ہوا۔");
         process.exit(0);
     }
 }
 
-debugDatabaseStructure();
+extractLidMaster();
