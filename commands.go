@@ -435,8 +435,10 @@ func getLIDNumber(jid *types.JID) string {
 		return "unknown"
 	}
 	
-	// LID استعمال کریں
+	// ✅ CRITICAL: ToNonAD() استعمال کریں - یہ LID return کرتا ہے
 	lid := jid.ToNonAD()
+	
+	// ✅ اب LID.User سے نمبر نکالیں
 	return extractPhoneFromLID(lid.User)
 }
 
@@ -464,7 +466,13 @@ func isOwner(client *whatsmeow.Client, sender types.JID) bool {
 	botNum := getLIDNumber(client.Store.ID)
 	senderNum := getLIDNumber(&sender)
 
-	fmt.Printf("🔍 Owner Check (LID) - Bot: %s | Sender: %s | Match: %v\n", botNum, senderNum, botNum == senderNum)
+	// ✅ Debug log
+	fmt.Printf("🔍 Owner Check:\n")
+	fmt.Printf("   Bot JID: %s\n", client.Store.ID.String())
+	fmt.Printf("   Bot LID: %s -> Number: %s\n", client.Store.ID.ToNonAD().String(), botNum)
+	fmt.Printf("   Sender JID: %s\n", sender.String())
+	fmt.Printf("   Sender LID: %s -> Number: %s\n", sender.ToNonAD().String(), senderNum)
+	fmt.Printf("   Match: %v\n", botNum == senderNum)
 
 	return botNum == senderNum
 }
