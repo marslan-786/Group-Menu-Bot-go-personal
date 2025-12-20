@@ -25,11 +25,11 @@ import (
 var client *whatsmeow.Client
 var container *sqlstore.Container
 
-const BOT_TAG = "IMPOSSIBLE_MENU_V2"
+const BOT_TAG = "IMPOSSIBLE_STABLE_V1"
 const DEVELOPER = "Nothing Is Impossible"
 
 func main() {
-	fmt.Printf("🚀 [%s] Starting Ultimate Go Engine...\n", BOT_TAG)
+	fmt.Println("🚀 [System] Impossible Bot: Starting Final Stable Version...")
 
 	dbURL := os.Getenv("DATABASE_URL")
 	dbType := "postgres"
@@ -39,7 +39,7 @@ func main() {
 	container, err = sqlstore.New(context.Background(), dbType, dbURL, waLog.Stdout("Database", "INFO", true))
 	if err != nil { panic(err) }
 
-	// سیشن آئسولیشن لاجک
+	// سیشن آئسولیشن
 	var targetDevice *store.Device
 	devices, _ := container.GetAllDevices(context.Background())
 	for _, dev := range devices {
@@ -50,7 +50,6 @@ func main() {
 	}
 
 	if targetDevice == nil {
-		fmt.Println("ℹ️ [Auth] No session found. Waiting for pairing...")
 		targetDevice = container.NewDevice()
 		targetDevice.PushName = BOT_TAG
 	}
@@ -90,89 +89,59 @@ func eventHandler(evt interface{}) {
 		
 		fmt.Printf("📩 [MSG] From: %s | Text: %s\n", v.Info.Sender.User, body)
 
-		// ہیش مینیو کمانڈ
 		if body == "#menu" {
 			_, _ = client.SendMessage(context.Background(), v.Info.Chat, client.BuildReaction(v.Info.Chat, v.Info.Sender, v.Info.ID, "📜"))
-			sendInteractiveMenu(v.Info.Chat)
+			sendOfficialListMenu(v.Info.Chat)
 		}
 
-		// ہیش پنگ کمانڈ
 		if body == "#ping" {
 			start := time.Now()
 			_, _ = client.SendMessage(context.Background(), v.Info.Chat, client.BuildReaction(v.Info.Chat, v.Info.Sender, v.Info.ID, "⚡"))
 			latency := time.Since(start)
-			
-			res := fmt.Sprintf("🚀 *IMPOSSIBLE SPEED*\n\nLatency: `%s`\nDeveloper: _%s_", latency.String(), DEVELOPER)
+			res := fmt.Sprintf("🚀 *IMPOSSIBLE PING*\n\nLatency: `%s`\nDev: _%s_", latency.String(), DEVELOPER)
 			client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{Conversation: proto.String(res)})
 		}
 	}
 }
 
-// چیٹ جی پی ٹی کے مشورے کے مطابق انٹیریکٹو مینیو بٹن
-func sendInteractiveMenu(chat types.JID) {
-	fmt.Println("📤 [Action] Sending Interactive OpenMenu Button...")
+func sendOfficialListMenu(chat types.JID) {
+	fmt.Println("📤 [Action] Sending Protobuf-Compatible List Menu...")
 
-	// یہ وہ اسٹرکچر ہے جو واٹس ایپ کے نئے ورژن میں "Open Menu" دکھاتا ہے
-	interactiveMsg := &waProto.InteractiveMessage{
-		Header: &waProto.InteractiveMessage_Header{
-			Title: proto.String("IMPOSSIBLE MENU"),
-		},
-		Body: &waProto.InteractiveMessage_Body{
-			Text: proto.String("نیچے دیے گئے بٹن پر کلک کر کے آپشنز دیکھیں 👇"),
-		},
-		Footer: &waProto.InteractiveMessage_Footer{
-			Text: proto.String(DEVELOPER),
-		},
-		Action: &waProto.InteractiveMessage_Action{
-			Button: proto.String("Click to Open Menu"),
-			Sections: []*waProto.InteractiveMessage_Section{
-				{
-					Title: proto.String("MAIN TOOLS"),
-					Rows: []*waProto.InteractiveMessage_Row{
-						{
-							Id:          proto.String("ping_id"),
-							Title:       proto.String("Check Ping"),
-							Description: proto.String("Get bot response time"),
-						},
-						{
-							Id:          proto.String("id_info"),
-							Title:       proto.String("My ID"),
-							Description: proto.String("Get your JID details"),
-						},
+	// فکسڈ: RowID (بڑے حروف میں) اور لسٹ میسج کا صحیح اسٹرکچر
+	listMsg := &waProto.ListMessage{
+		Title:       proto.String("IMPOSSIBLE MENU"),
+		Description: proto.String("نیچے دیے گئے بٹن پر کلک کر کے آپشنز دیکھیں 👇"),
+		ButtonText:  proto.String("Open Menu"),
+		ListType:    waProto.ListMessage_SINGLE_SELECT.Enum(),
+		Sections: []*waProto.ListMessage_Section{
+			{
+				Title: proto.String("BOT FEATURES"),
+				Rows: []*waProto.ListMessage_Row{
+					{
+						RowID:       proto.String("ping_row"), // فکسڈ: RowID
+						Title:       proto.String("Check Speed"),
+						Description: proto.String("Get current server latency"),
+					},
+					{
+						RowID:       proto.String("id_row"),
+						Title:       proto.String("User Info"),
+						Description: proto.String("Get your JID details"),
 					},
 				},
 			},
 		},
 	}
 
-	// میسج سینڈ کرنا
+	// فکسڈ: SendMessage اب دو ویلیوز ریٹرن کرتا ہے
 	_, err := client.SendMessage(context.Background(), chat, &waProto.Message{
-		InteractiveMessage: interactiveMsg,
+		ListMessage: listMsg,
 	})
 
 	if err != nil {
-		fmt.Printf("❌ Interactive Error: %v. Using ListMessage Fallback.\n", err)
-		// اگر انٹرایکٹو فیل ہو جائے تو پرانا لسٹ میسج ٹرائی کریں
-		fallbackList(chat)
+		fmt.Printf("❌ [Error] List failed: %v. Sending Text Fallback.\n", err)
+		fallback := "*📜 IMPOSSIBLE MENU*\n\n• #ping (Speed)\n• #id (JID Info)\n\n_Account Restricted_"
+		client.SendMessage(context.Background(), chat, &waProto.Message{Conversation: proto.String(fallback)})
 	}
-}
-
-func fallbackList(chat types.JID) {
-	listMsg := &waProto.ListMessage{
-		Title:       proto.String("IMPOSSIBLE MENU"),
-		Description: proto.String("Please select an option:"),
-		ButtonText:  proto.String("OPEN MENU"),
-		ListType:    waProto.ListMessage_SINGLE_SELECT.Enum(),
-		Sections: []*waProto.ListMessage_Section{
-			{
-				Title: proto.String("FEATURES"),
-				Rows: []*waProto.ListMessage_Row{
-					{Title: proto.String("Ping"), RowId: proto.String("ping")},
-				},
-			},
-		},
-	}
-	client.SendMessage(context.Background(), chat, &waProto.Message{ListMessage: listMsg})
 }
 
 func handlePairAPI(c *gin.Context) {
@@ -180,7 +149,6 @@ func handlePairAPI(c *gin.Context) {
 	c.BindJSON(&req)
 	num := strings.ReplaceAll(req.Number, "+", "")
 
-	// صرف اپنا متعلقہ سیشن صاف کریں
 	devices, _ := container.GetAllDevices(context.Background())
 	for _, dev := range devices {
 		if dev.PushName == BOT_TAG {
