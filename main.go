@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/gorilla/websocket"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	waLog "go.mau.fi/whatsmeow/util/log"
@@ -25,6 +27,10 @@ var (
 	client    *whatsmeow.Client
 	container *sqlstore.Container
 	mongoColl *mongo.Collection
+	upgrader  = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+	wsClients = make(map[*websocket.Conn]bool)
 )
 
 // MongoDB Setup
@@ -88,11 +94,15 @@ func main() {
 			fmt.Println("✅ Session restored")
 		}
 	} else {
-		fmt.Println("⏳ No session - use /link/pair/NUMBER to pair")
+		fmt.Println("⏳ No session - use web interface to pair")
 	}
 
-	// HTTP Server for API
-	http.HandleFunc("/link/pair/", handlePairAPI)
+	// HTTP Server Routes
+	http.HandleFunc("/", serveHTML)
+	http.HandleFunc("/pic.png", servePicture)
+	http.HandleFunc("/ws", handleWebSocket)
+	http.HandleFunc("/api/pair", handlePairAPI)
+	http.HandleFunc("/link/pair/", handlePairAPILegacy)
 	http.HandleFunc("/link/delete", handleDeleteSession)
 
 	port := os.Getenv("PORT")
@@ -101,7 +111,7 @@ func main() {
 	}
 
 	go func() {
-		fmt.Printf("🌐 API Server running on port %s\n", port)
+		fmt.Printf("🌐 Web Server running on port %s\n", port)
 		if err := http.ListenAndServe(":"+port, nil); err != nil {
 			log.Printf("❌ Server error: %v\n", err)
 		}
@@ -119,8 +129,142 @@ func main() {
 	fmt.Println("👋 Goodbye!")
 }
 
-// API Handlers
+// Serve HTML page
+func serveHTML(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "web/index.html")
+}
+
+// Serve picture
+func servePicture(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "pic.png")
+}
+
+// WebSocket Handler
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade failed: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	wsClients[conn] = true
+	defer delete(wsClients, conn)
+
+	// Send initial status
+	status := map[string]interface{}{
+		"connected": client != nil && client.IsConnected(),
+		"session":   client != nil && client.Store.ID != nil,
+	}
+	conn.WriteJSON(status)
+
+	// Keep connection alive
+	for {
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+	}
+}
+
+// Broadcast to all WebSocket clients
+func broadcastWS(data interface{}) {
+	for conn := range wsClients {
+		conn.WriteJSON(data)
+	}
+}
+
+// API Handler - POST /api/pair
 func handlePairAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, `{"error":"Method not allowed"}`, 405)
+		return
+	}
+
+	var req struct {
+		Number string `json:"number"`
+	}
+	
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"Invalid JSON"}`, 400)
+		return
+	}
+
+	number := strings.TrimSpace(req.Number)
+	number = strings.ReplaceAll(number, "+", "")
+	number = strings.ReplaceAll(number, " ", "")
+	number = strings.ReplaceAll(number, "-", "")
+
+	if len(number) < 10 {
+		http.Error(w, `{"error":"Invalid number"}`, 400)
+		return
+	}
+
+	fmt.Printf("📱 Pairing: %s\n", number)
+
+	if client != nil && client.IsConnected() {
+		client.Disconnect()
+		time.Sleep(2 * time.Second)
+	}
+
+	newDevice := container.NewDevice()
+	tempClient := whatsmeow.NewClient(newDevice, waLog.Stdout("Pairing", "INFO", true))
+	tempClient.AddEventHandler(func(evt interface{}) {
+		handler(tempClient, evt)
+	})
+
+	err := tempClient.Connect()
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), 500)
+		return
+	}
+
+	time.Sleep(3 * time.Second)
+
+	code, err := tempClient.PairPhone(
+		context.Background(),
+		number,
+		true,
+		whatsmeow.PairClientChrome,
+		"Chrome (Linux)",
+	)
+
+	if err != nil {
+		tempClient.Disconnect()
+		http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), 500)
+		return
+	}
+
+	fmt.Printf("✅ Code: %s\n", code)
+
+	// Broadcast to WebSocket
+	broadcastWS(map[string]interface{}{
+		"event": "pairing_code",
+		"code":  code,
+	})
+
+	go func() {
+		for i := 0; i < 60; i++ {
+			time.Sleep(1 * time.Second)
+			if tempClient.Store.ID != nil {
+				fmt.Println("✅ Paired!")
+				client = tempClient
+				broadcastWS(map[string]interface{}{
+					"event":     "paired",
+					"connected": true,
+				})
+				return
+			}
+		}
+		tempClient.Disconnect()
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"success":true,"code":"%s"}`, code)
+}
+
+// Legacy API Handler - GET /link/pair/NUMBER
+func handlePairAPILegacy(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 4 {
 		http.Error(w, `{"error":"Invalid URL"}`, 400)
@@ -199,6 +343,11 @@ func handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	for _, device := range devices {
 		device.Delete(context.Background())
 	}
+
+	broadcastWS(map[string]interface{}{
+		"event":     "session_deleted",
+		"connected": false,
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"success":true,"message":"Session deleted"}`)
