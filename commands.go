@@ -24,49 +24,28 @@ import (
 var (
 	activeClients = make(map[string]*whatsmeow.Client)
 	clientsMutex  sync.RWMutex
+	
+	// Global client reference for single-bot mode
+	globalClient *whatsmeow.Client
 )
 
 // ═══════════════════════════════════════════════════════════════
-// 📡 MAIN EVENT HANDLER
+// 📡 MAIN EVENT HANDLER (1 ARGUMENT - COMPATIBLE WITH MAIN.GO)
 // ═══════════════════════════════════════════════════════════════
 
 func handler(evt interface{}) {
+	// Global client استعمال کریں (main.go سے set ہوتا ہے)
+	client := globalClient
+	if client == nil {
+		return
+	}
+	
 	switch v := evt.(type) {
 	case *events.Message:
-		// Event سے client نکالیں
-		if client := getClientFromEvent(v); client != nil {
-			go processMessage(client, v)
-		}
+		go processMessage(client, v)
 	case *events.GroupInfo:
-		if client := getClientFromGroupEvent(v); client != nil {
-			go handleGroupInfoChange(client, v)
-		}
+		go handleGroupInfoChange(client, v)
 	}
-}
-
-// Event سے client نکالنے کا helper
-func getClientFromEvent(v *events.Message) *whatsmeow.Client {
-	// Message Info سے receiver/bot کا JID نکالیں
-	// یہ bot خود ہوگا
-	clientsMutex.RLock()
-	defer clientsMutex.RUnlock()
-	
-	// پہلا available client return کریں
-	// Better: event میں specific client info ہو
-	for _, client := range activeClients {
-		return client
-	}
-	return nil
-}
-
-func getClientFromGroupEvent(v *events.GroupInfo) *whatsmeow.Client {
-	clientsMutex.RLock()
-	defer clientsMutex.RUnlock()
-	
-	for _, client := range activeClients {
-		return client
-	}
-	return nil
 }
 
 // یہ فنکشن چیک کرتا ہے کہ آیا میسج میں موجود لفظ ہماری لسٹ میں ہے یا نہیں
@@ -531,8 +510,12 @@ func sendMenu(client *whatsmeow.Client, v *events.Message) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 📜 باقی UI FUNCTIONS
+// 🔧 HELPER TO SET GLOBAL CLIENT (CALLED FROM MAIN.GO)
 // ═══════════════════════════════════════════════════════════════
+
+func SetGlobalClient(c *whatsmeow.Client) {
+	globalClient = c
+}
 
 // ═══════════════════════════════════════════════════════════════
 // 📜 باقی UI FUNCTIONS
@@ -680,10 +663,11 @@ func ConnectNewSession(device *store.Device) {
 	clientLog := waLog.Stdout("Client", "DEBUG", true)
 	client := whatsmeow.NewClient(device, clientLog)
 	
-	// Event handler - client ke sath
-	client.AddEventHandler(func(evt interface{}) {
-		handler(client, evt)
-	})
+	// Event handler - single argument version
+	client.AddEventHandler(handler)
+	
+	// Global client set کریں
+	SetGlobalClient(client)
 
 	botID := getCleanID(device.ID.User)
 	
