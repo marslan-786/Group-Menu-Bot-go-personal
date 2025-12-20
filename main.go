@@ -120,57 +120,89 @@ func eventHandler(evt interface{}) {
 	switch v := evt.(type) {
 	case *events.Message:
 		if v.Info.IsFromMe {
+			fmt.Println("⏭️ Skipping own message")
 			return
 		}
 
 		text := strings.ToLower(strings.TrimSpace(getText(v.Message)))
 		
 		// Log incoming message for debugging
-		fmt.Printf("📩 Message from %s: %s\n", v.Info.Sender.User, text)
+		fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+		fmt.Printf("📩 NEW MESSAGE\n")
+		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+		fmt.Printf("👤 From: %s\n", v.Info.Sender.User)
+		fmt.Printf("💬 Text: '%s'\n", text)
+		fmt.Printf("📱 Chat: %s\n", v.Info.Chat.String())
+		
+		// Check message type
+		if v.Message.GetListResponseMessage() != nil {
+			fmt.Println("📋 Message Type: LIST RESPONSE")
+		} else if v.Message.GetConversation() != "" {
+			fmt.Println("💭 Message Type: TEXT")
+		} else if v.Message.GetExtendedTextMessage() != nil {
+			fmt.Println("📝 Message Type: EXTENDED TEXT")
+		} else {
+			fmt.Println("❓ Message Type: UNKNOWN")
+		}
+		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
 		// Handle list response
 		if v.Message.GetListResponseMessage() != nil {
+			fmt.Println("🔄 Processing list response...")
 			handleListResponse(v)
 			return
 		}
 
 		// Handle text commands
+		fmt.Printf("🔍 Checking command: '%s'\n", text)
 		switch text {
 		case "#menu", "menu", "/menu":
+			fmt.Println("✅ Command matched: MENU")
 			fmt.Println("📋 Sending menu...")
 			sendMenu(v.Info.Chat)
 		case "#ping", "ping", "/ping":
+			fmt.Println("✅ Command matched: PING")
 			fmt.Println("⚡ Sending ping...")
 			sendPing(v.Info.Chat)
 		case "#info", "info", "/info":
+			fmt.Println("✅ Command matched: INFO")
 			fmt.Println("ℹ️ Sending info...")
 			sendInfo(v.Info.Chat)
 		default:
 			// Log unhandled messages
 			if text != "" {
-				fmt.Printf("❓ Unhandled command: %s\n", text)
+				fmt.Printf("❌ No command matched for: '%s'\n", text)
+			} else {
+				fmt.Println("⚠️ Empty text - might be media/other message type")
 			}
 		}
 	case *events.Connected:
-		fmt.Println("✅ Bot connected to WhatsApp")
+		fmt.Println("\n🟢 ════════════════════════════════")
+		fmt.Println("   BOT CONNECTED TO WHATSAPP")
+		fmt.Println("   ════════════════════════════════\n")
 	case *events.Disconnected:
-		fmt.Println("⚠️ Bot disconnected from WhatsApp")
+		fmt.Println("\n🔴 ════════════════════════════════")
+		fmt.Println("   BOT DISCONNECTED FROM WHATSAPP")
+		fmt.Println("   ════════════════════════════════\n")
 	}
 }
 
 func handleListResponse(v *events.Message) {
 	listResponse := v.Message.GetListResponseMessage()
 	if listResponse == nil {
+		fmt.Println("⚠️ List response is nil")
 		return
 	}
 
-	selectedID := listResponse.GetSingleSelectReply().GetSelectedRowId()
-	fmt.Printf("📌 List response: %s\n", selectedID)
+	selectedID := listResponse.GetSingleSelectReply().GetSelectedRowID()
+	fmt.Printf("📌 List response received - Selected ID: %s\n", selectedID)
 
 	switch selectedID {
 	case "cmd_ping":
+		fmt.Println("✅ User selected: Ping")
 		sendPing(v.Info.Chat)
 	case "cmd_info":
+		fmt.Println("✅ User selected: Info")
 		sendInfo(v.Info.Chat)
 	default:
 		fmt.Printf("❓ Unknown list option: %s\n", selectedID)
@@ -195,7 +227,7 @@ func getText(msg *waProto.Message) string {
 func sendMenu(chat types.JID) {
 	menu := &waProto.ListMessage{
 		Title:       proto.String("🚀 IMPOSSIBLE MENU"),
-		Description: proto.String("براہ کرم کوئی آپشن منتخب کریں\nPlease select an option"),
+		Description: proto.String("براہ کرم کوئی آپشن منتخب کریں"),
 		ButtonText:  proto.String("📋 مینو کھولیں"),
 		ListType:    waProto.ListMessage_SINGLE_SELECT.Enum(),
 		Sections: []*waProto.ListMessage_Section{
@@ -217,15 +249,9 @@ func sendMenu(chat types.JID) {
 		},
 	}
 
-	_, err := client.SendMessage(context.Background(), chat, &waProto.Message{
+	client.SendMessage(context.Background(), chat, &waProto.Message{
 		ListMessage: menu,
 	})
-	
-	if err != nil {
-		fmt.Printf("❌ Error sending menu: %v\n", err)
-	} else {
-		fmt.Println("✅ Menu sent successfully")
-	}
 }
 
 // ================= PING =================
@@ -251,39 +277,9 @@ func sendPing(chat types.JID) {
 		uptime,
 	)
 
-	_, err := client.SendMessage(context.Background(), chat, &waProto.Message{
-		Conversation: proto.String(msg),
-	})
-	
-	if err != nil {
-		fmt.Printf("❌ Error sending ping: %v\n", err)
-	} else {
-		fmt.Println("✅ Ping sent successfully")
-	}
-}
-
-// ================= INFO =================
-
-func sendInfo(chat types.JID) {
-	uptime := time.Since(startTime).Round(time.Second)
-	
-	msg := fmt.Sprintf(
-		"╔══════════════════╗\n"+
-			"║ 🤖 BOT INFO\n"+
-			"╠══════════════════╣\n"+
-			"║ 📛 IMPOSSIBLE BOT\n"+
-			"║ 👨‍💻 %s\n"+
-			"║ ⏱ UPTIME: %s\n"+
-			"║ 🏷 VERSION: 1.0\n"+
-			"╚══════════════════╝",
-		DEV_NAME,
-		uptime,
-	)
-
 	client.SendMessage(context.Background(), chat, &waProto.Message{
 		Conversation: proto.String(msg),
 	})
-	fmt.Println("✅ Info sent")
 }
 
 // ================= PAIR API =================
