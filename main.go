@@ -22,8 +22,8 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
-	"go.mau.fi/whatsmeow/binary/proto" // ✅ Add this import
-	waProto "go.mau.fi/whatsmeow/binary/proto" // ✅ waProto alias
+	waProto "go.mau.fi/whatsmeow/binary/proto"
+	"google.golang.org/protobuf/proto" // ✅ proto.String کے لیے یہ import ضروری ہے
 )
 
 const (
@@ -131,15 +131,15 @@ func eventHandler(evt interface{}) {
 	}
 }
 
-func getText(msg *waProto.Message) string { // ✅ fixed type
+func getText(msg *waProto.Message) string {
 	if msg == nil {
 		return ""
 	}
 	if msg.Conversation != nil {
 		return *msg.Conversation
 	}
-	if msg.ExtendedTextMessage != nil {
-		return msg.ExtendedTextMessage.Text
+	if msg.ExtendedTextMessage != nil && msg.ExtendedTextMessage.Text != nil {
+		return *msg.ExtendedTextMessage.Text // ✅ pointer dereference کیا
 	}
 	return ""
 }
@@ -148,17 +148,23 @@ func getText(msg *waProto.Message) string { // ✅ fixed type
 
 func sendMenu(chat types.JID) {
 	menu := &waProto.ListMessage{
-		Title:       proto.String("IMPOSSIBLE MENU"),
-		Description: proto.String("Select an option"),
-		ButtonText:  proto.String("Open Menu"),
+		Title:       proto.String("🚀 IMPOSSIBLE MENU"),
+		Description: proto.String("براہ کرم کوئی آپشن منتخب کریں"),
+		ButtonText:  proto.String("📋 مینو کھولیں"),
 		ListType:    waProto.ListMessage_SINGLE_SELECT.Enum(),
 		Sections: []*waProto.ListMessage_Section{
 			{
-				Title: proto.String("COMMANDS"),
+				Title: proto.String("⚡ COMMANDS"),
 				Rows: []*waProto.ListMessage_Row{
 					{
-						RowID: proto.String("ping"),
-						Title: proto.String("Ping"),
+						RowId:       proto.String("cmd_ping"),
+						Title:       proto.String("⚡ Ping"),
+						Description: proto.String("Bot کی رفتار چیک کریں"),
+					},
+					{
+						RowId:       proto.String("cmd_info"),
+						Title:       proto.String("ℹ️ Info"),
+						Description: proto.String("Bot کی معلومات"),
 					},
 				},
 			},
@@ -186,7 +192,7 @@ func sendPing(chat types.JID) {
 			"╠══════════════════╣\n"+
 			"║ ⚡ PING: %d ms\n"+
 			"╠══════════════════╣\n"+
-			"║ ⏱ %s\n"+
+			"║ ⏱ UPTIME: %s\n"+
 			"╚══════════════════╝",
 		DEV_NAME,
 		ms,
@@ -194,7 +200,7 @@ func sendPing(chat types.JID) {
 	)
 
 	client.SendMessage(context.Background(), chat, &waProto.Message{
-		Conversation: &msg,
+		Conversation: proto.String(msg), // ✅ proto.String استعمال کیا
 	})
 }
 
