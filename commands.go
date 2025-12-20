@@ -67,6 +67,11 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	prefix := data.Prefix
 	dataMutex.RUnlock()
 
+	// ✅ FIX: Only process if message starts with prefix or is a known command
+	if !strings.HasPrefix(body, prefix) && !isKnownCommand(body) {
+		return // Ignore non-commands
+	}
+
 	cmd := strings.ToLower(body)
 	args := []string{}
 
@@ -89,7 +94,9 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	}
 
 	fullArgs := strings.Join(args, " ")
-	fmt.Printf("📩 CMD: %s | Chat: %s\n", cmd, v.Info.Chat.User)
+	
+	// ✅ FIX: Only log valid commands
+	fmt.Printf("📩 CMD: %s | User: %s | Chat: %s\n", cmd, v.Info.Sender.User, v.Info.Chat.User)
 
 	switch cmd {
 	// مینیو سسٹم
@@ -198,6 +205,27 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	case "vv":
 		handleVV(client, v)
 	}
+}
+
+// ✅ NEW: Check if message is a known command
+func isKnownCommand(text string) bool {
+	commands := []string{
+		"menu", "help", "list", "ping", "id", "owner", "data",
+		"alwaysonline", "autoread", "autoreact", "autostatus", "statusreact",
+		"addstatus", "delstatus", "liststatus", "readallstatus", "setprefix", "mode",
+		"antilink", "antipic", "antivideo", "antisticker",
+		"kick", "add", "promote", "demote", "tagall", "hidetag", "group", "del", "delete",
+		"tiktok", "tt", "fb", "facebook", "insta", "ig", "pin", "pinterest", "ytmp3", "ytmp4",
+		"sticker", "s", "toimg", "tovideo", "removebg", "remini", "tourl", "weather", "translate", "tr", "vv",
+	}
+	
+	lowerText := strings.ToLower(strings.TrimSpace(text))
+	for _, cmd := range commands {
+		if strings.HasPrefix(lowerText, cmd) {
+			return true
+		}
+	}
+	return false
 }
 
 // ==================== مینیو سسٹم ====================
@@ -473,6 +501,7 @@ func isAdmin(client *whatsmeow.Client, chat, user types.JID) bool {
 	return false
 }
 
+// ✅ FIX: Default mode is now PUBLIC
 func getGroupSettings(id string) *GroupSettings {
 	cacheMutex.RLock()
 	if s, ok := groupCache[id]; ok {
@@ -483,7 +512,7 @@ func getGroupSettings(id string) *GroupSettings {
 
 	s := &GroupSettings{
 		ChatID:         id,
-		Mode:           "public",
+		Mode:           "public", // ✅ FIXED: Default is PUBLIC
 		Antilink:       false,
 		AntilinkAdmin:  true,
 		AntilinkAction: "delete",
