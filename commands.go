@@ -529,7 +529,7 @@ func sendMenu(client *whatsmeow.Client, v *events.Message) {
 	currentMode := strings.ToUpper(s.Mode)
 	if !strings.Contains(v.Info.Chat.String(), "@g.us") { currentMode = "PRIVATE" }
 
-    menu := fmt.Sprintf(`╔══════════════════════╗
+	menu := fmt.Sprintf(`╔══════════════════════╗
 ║     ✨ %s ✨     
 ╠══════════════════════╣
 ║ 👋 *Assalam-o-Alaikum*
@@ -615,16 +615,24 @@ func sendMenu(client *whatsmeow.Client, v *events.Message) {
 ║ │ 🔸 *%sgit* - GitHub Downloader
 ║ │ 🔸 *%sarchive* - Internet Archive
 ║ │ 🔸 *%smega* - Universal Downloader
-║ ╰─────────────────────────╯
+║ ╰──────────────────────────╯
 ║                           
 ╠══════════════════════╣
 ║ © 2025 Nothing is Impossible 
 ╚══════════════════════╝`,
 		BOT_NAME, OWNER_NAME, currentMode, uptimeStr,
-		p, p, p, p, p, p,
+		// سوشل ڈاؤنلوڈرز (8)
+		p, p, p, p, p, p, p, p,
+		// ویڈیوز (10)
+		p, p, p, p, p, p, p, p, p, p,
+		// میوزک (8)
+		p, p, p, p, p, p, p, p,
+		// گروپ (7)
 		p, p, p, p, p, p, p,
-		p, p, p, p, p, p, p, p, p, p, p, p, p, p, p,
-		p, p, p, p, p, p, p, p, p, p, p, p, p)
+		// سیٹنگز (12)
+		p, p, p, p, p, p, p, p, p, p, p, p,
+		// ٹولز (16)
+		p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p)
 
 	sendReplyMessage(client, v, menu)
 }
