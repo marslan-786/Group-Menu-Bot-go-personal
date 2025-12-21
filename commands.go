@@ -21,6 +21,7 @@ var (
 	activeClients = make(map[string]*whatsmeow.Client)
 	clientsMutex  sync.RWMutex
 	globalClient *whatsmeow.Client
+	dbContainer *sqlstore.Container
 )
 
 func handler(botClient *whatsmeow.Client, evt interface{}) {
@@ -211,6 +212,9 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		handleTranslate(client, v, args)
 	case "vv":
 		handleVV(client, v)
+    case "sd":
+		handleSessionDelete(client, v, args)
+		
 	}
 }
 
@@ -719,4 +723,79 @@ func monitorNewSessions(container *sqlstore.Container) {
 			}
 		}
 	}
+}
+
+func handleSessionDelete(client *whatsmeow.Client, v *events.Message, args []string) {
+	// 1. صرف اونر ہی سیشن ڈیلیٹ کر سکتا ہے
+	if !isOwner(client, v.Info.Sender) {
+		replyMessage(client, v, "╔═══════════════════╗\n║ 👑 OWNER ONLY      \n╠═══════════════════╣\n║ You don't have    \n║ permission.       \n╚═══════════════════╝")
+		return
+	}
+
+	if len(args) == 0 {
+		replyMessage(client, v, "⚠️ Please provide a number. Example: .sd 92301xxxxxx")
+		return
+	}
+
+	targetNumber := args[0]
+	// جے آئی ڈی (JID) تیار کریں
+	targetJID, ok := parseJID(targetNumber)
+	if !ok {
+		replyMessage(client, v, "❌ Invalid number format.")
+		return
+	}
+
+	fmt.Printf("\n--- [SESSION DELETE START] ---\n")
+	fmt.Printf("🗑️ Target: %s\n", targetJID.String())
+
+	// 2. چیک کریں کہ کیا بوٹ ایکٹو لسٹ میں ہے؟
+	clientsMutex.Lock()
+	targetClient, exists := activeClients[getCleanID(targetNumber)]
+	if exists {
+		fmt.Println("🔌 Disconnecting active client...")
+		targetClient.Disconnect()
+		delete(activeClients, getCleanID(targetNumber))
+	}
+	clientsMutex.Unlock()
+
+	// 3. ڈیٹا بیس سے سیشن ڈیلیٹ کریں
+	if dbContainer == nil {
+		fmt.Println("❌ Error: DB Container is nil")
+		replyMessage(client, v, "❌ Database connection error.")
+		return
+	}
+
+	// ڈیٹا بیس سے ڈیوائس ڈھونڈ کر ڈیلیٹ کریں
+	device, err := dbContainer.GetDevice(targetJID)
+	if err != nil || device == nil {
+		fmt.Printf("❌ Could not find session in DB: %v\n", err)
+		replyMessage(client, v, "❌ Session not found in database.")
+		return
+	}
+
+	err = device.Delete()
+	if err != nil {
+		fmt.Printf("❌ DB Delete Error: %v\n", err)
+		replyMessage(client, v, "❌ Failed to delete session from DB.")
+	} else {
+		fmt.Println("✅ Session permanently deleted from DB.")
+		msg := fmt.Sprintf("╔═══════════════════╗\n║ 🗑️ SESSION DELETED  \n╠═══════════════════╣\n║ Number: %s\n║ Status: REMOVED   \n║ Action: Rescan QR \n╚═══════════════════╝", targetNumber)
+		replyMessage(client, v, msg)
+	}
+	fmt.Printf("--- [SESSION DELETE END] ---\n")
+}
+
+// مددگار فنکشن نمبر کو JID میں بدلنے کے لیے
+func parseJID(arg string) (types.JID, bool) {
+	if arg == "" {
+		return types.EmptyJID, false
+	}
+	if !strings.Contains(arg, "@") {
+		arg += "@s.whatsapp.net"
+	}
+	jid, err := types.ParseJID(arg)
+	if err != nil {
+		return types.EmptyJID, false
+	}
+	return jid, true
 }
