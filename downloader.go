@@ -15,10 +15,20 @@ import (
 
 // ==================== ڈاؤن لوڈر سسٹم ====================
 
-func handleTikTok(client *whatsmeow.Client, v *events.Message, url string) {
-	if url == "" {
+// ٹک ٹاک ڈیٹا کو عارضی طور پر محفوظ کرنے کے لیے
+type TTState struct {
+	PlayURL  string
+	MusicURL string
+	Title    string
+	Size     uint64
+}
+
+var ttCache = make(map[string]TTState) // Key: SenderID
+
+func handleTikTok(client *whatsmeow.Client, v *events.Message, urlStr string) {
+	if urlStr == "" {
 		msg := `╔═══════════════╗
-║ 📝 TIKTOK
+║ 📝 TIKTOK 
 ╠═══════════════
 ║ Usage:
 ║ .tiktok <url>
@@ -32,48 +42,53 @@ func handleTikTok(client *whatsmeow.Client, v *events.Message, url string) {
 	}
 
 	react(client, v.Info.Chat, v.Info.ID, "🎵")
-	
-	msg := `╔═══════════════╗
-║ 🎵 PROCESSING
-╠═══════════════
-║ ⏳ Downloading
-║ Please wait...
-╚═══════════════`
-	replyMessage(client, v, msg)
 
-	// 1. اے پی آئی رسپانس کے مطابق اسٹرکٹ
+	// اے پی آئی سے ڈیٹا فیچ کریں
 	type TikTokResponse struct {
 		Code int `json:"code"`
 		Data struct {
-			Play  string `json:"play"`
-			Title string `json:"title"`
-			Size  uint64 `json:"size"`
+			Play   string `json:"play"`
+			WMPlay string `json:"wmplay"`
+			Music  string `json:"music"`
+			Title  string `json:"title"`
+			Size   uint64 `json:"size"`
 		} `json:"data"`
 	}
 
 	var r TikTokResponse
-	apiUrl := "https://www.tikwm.com/api/?url=" + url
-	fmt.Printf("📡 [TIKTOK] Fetching: %s\n", apiUrl)
-	
+	apiUrl := "https://www.tikwm.com/api/?url=" + urlStr
 	err := getJson(apiUrl, &r)
-	
-	// 2. ڈیٹا چیک کریں (Code 0 کا مطلب کامیابی ہے)
-	if err == nil && r.Code == 0 && r.Data.Play != "" {
-		fmt.Printf("✅ [TIKTOK] API Success! Video Size: %d bytes\n", r.Data.Size)
-		
-		caption := fmt.Sprintf("🎬 *TIKTOK DOWNLOAD*\n\n📝 *Title:* %s\n\n✅ Successfully Downloaded", r.Data.Title)
-		
-		// ویڈیو ڈاؤن لوڈ اور سینڈ کریں
-		sendTikTokVideo(client, v, r.Data.Play, caption, r.Data.Size)
+
+	if err == nil && r.Code == 0 {
+		// ڈیٹا کو کیش میں محفوظ کریں
+		senderID := v.Info.Sender.String()
+		ttCache[senderID] = TTState{
+			PlayURL:  r.Data.Play, // واٹر مارک کے بغیر
+			MusicURL: r.Data.Music,
+			Title:    r.Data.Title,
+			Size:     r.Data.Size,
+		}
+
+		// خوبصورت مینو بھیجیں
+		menuMsg := fmt.Sprintf(`╔════════════════════╗
+║   🎵 TIKTOK DOWNLOADER   
+╠════════════════════╣
+║                           
+║  📝 *Title:* ║  %s
+║                           
+║  *Select an option:* ║                           
+║  [1] 🎬 Video (No Watermark)
+║  [2] 🎵 Audio (MP3)      
+║  [3] 📄 Video Information 
+║                           
+╠════════════════════╣
+║ 💡 Reply with the number  
+║    to download the file.  
+╚════════════════════╝`, r.Data.Title)
+
+		replyMessage(client, v, menuMsg)
 	} else {
-		fmt.Printf("❌ [TIKTOK] API Failed. Code: %d\n", r.Code)
-		errMsg := `╔═══════════════╗
-║ ❌ FAILED
-╠═══════════════
-║ Could not fetch
-║ video. Invalid link
-╚═══════════════`
-		replyMessage(client, v, errMsg)
+		replyMessage(client, v, "╔═══════════════╗\n║ ❌ FAILED\n╠═══════════════\n║ Invalid Link or\n║ API Error\n╚═══════════════")
 	}
 }
 
