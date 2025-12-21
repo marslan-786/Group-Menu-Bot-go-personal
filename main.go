@@ -52,6 +52,9 @@ func main() {
 	fmt.Println("🚀 IMPOSSIBLE BOT | START")
 
 	initMongoDB()
+	loadPersistentUptime()
+    startPersistentUptimeTracker()
+
 
 	dbURL := os.Getenv("DATABASE_URL")
 	dbType := "postgres"

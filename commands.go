@@ -21,6 +21,7 @@ var (
 	activeClients = make(map[string]*whatsmeow.Client)
 	clientsMutex  sync.RWMutex
 	globalClient *whatsmeow.Client
+	persistentUptime int64
 	dbContainer *sqlstore.Container
 )
 
@@ -377,8 +378,44 @@ func sendBotsList(client *whatsmeow.Client, v *events.Message) {
 	replyMessage(client, v, msg)
 }
 
+ // سیکنڈز میں
+
+// 1. ڈیٹا بیس سے پرانا اپ ٹائم لوڈ کریں (اسے اپنے main فنکشن میں DB کنیکٹ ہونے کے بعد کال کریں)
+func loadPersistentUptime() {
+	// یہاں آپ اپنے MongoDB سے 'bot_stats' یا کسی بھی کلیکشن سے 'total_uptime' نکالیں
+	// اگر ابھی لاجک نہیں لکھی تو یہ 0 سے شروع ہوگا
+	// persistentUptime = fetchFromMongo("total_uptime") 
+	fmt.Println("⏳ [UPTIME] Persistent uptime loaded from DB")
+}
+
+// 2. بیک گراؤنڈ ٹریکر جو ہر منٹ ڈیٹا بیس اپ ڈیٹ کرے گا
+func startPersistentUptimeTracker() {
+	ticker := time.NewTicker(1 * time.Minute)
+	go func() {
+		for range ticker.C {
+			persistentUptime += 60 // 60 سیکنڈز کا اضافہ
+			
+			// یہاں ڈیٹا بیس میں سیو کرنے کی لاجک ڈالیں
+			// saveToMongo("total_uptime", persistentUptime)
+		}
+	}()
+}
+
+// 3. ٹائم کو خوبصورت فارمیٹ میں بدلنے کے لیے (Days, Hours, Minutes)
+func getFormattedUptime() string {
+	seconds := persistentUptime
+	days := seconds / 86400
+	seconds %= 86400
+	hours := seconds / 3600
+	seconds %= 3600
+	minutes := seconds / 60
+	
+	return fmt.Sprintf("%dd %dh %dm", days, hours, minutes)
+}
+
+
 func sendMenu(client *whatsmeow.Client, v *events.Message) {
-	uptime := time.Since(startTime).Round(time.Second)
+	uptimeStr := getFormattedUptime()
 	dataMutex.RLock()
 	p := data.Prefix
 	dataMutex.RUnlock()
@@ -471,7 +508,7 @@ func sendPing(client *whatsmeow.Client, v *events.Message) {
 	start := time.Now()
 	time.Sleep(10 * time.Millisecond)
 	ms := time.Since(start).Milliseconds()
-	uptime := time.Since(startTime).Round(time.Second)
+	uptimeStr := getFormattedUptime()
 
 	msg := fmt.Sprintf(`╔════════════════╗
 ║ ⚡ PING STATUS
