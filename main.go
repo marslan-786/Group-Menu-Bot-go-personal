@@ -16,26 +16,23 @@ import (
 	"github.com/gorilla/websocket"
 	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/redis/go-redis/v9" // ✅ ریڈیس لائبریری
+	"github.com/redis/go-redis/v9" 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	waLog "go.mau.fi/whatsmeow/util/log"
-	rdb      *redis.Client     // ✅ یہ مسنگ تھا، اسی لیے 'undefined' آ رہا ہے
-    ctx      = context.Background() // ✅ ریڈیس کے لیے کانٹیکسٹ
 )
 
 var (
-	client           *whatsmeow.Client
-	container        *sqlstore.Container
-	rdb              *redis.Client // ✅ ریڈیس کلائنٹ
-	ctx              = context.Background()
-	upgrader         = websocket.Upgrader{
+	client    *whatsmeow.Client
+	container *sqlstore.Container
+	rdb       *redis.Client 
+	ctx       = context.Background()
+	upgrader  = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
 	wsClients = make(map[*websocket.Conn]bool)
 
-	// ⚡ الٹرا فاسٹ کیشنگ
 	botCleanIDCache = make(map[string]string)
 	botPrefixes     = make(map[string]string)
 	prefixMutex     sync.RWMutex
@@ -134,41 +131,59 @@ func main() {
 
 // ✅ ⚡ بوٹ کنیکٹ ہوتے ہی آئی ڈی اور پریفکس کیش کریں
 func ConnectNewSession(device *store.Device) {
+	// 1. آئی ڈی حاصل کریں اور اسے صاف کریں
 	rawID := device.ID.User
 	cleanID := getCleanID(rawID)
 	
-	// 1. آئی ڈی کیش میں ڈالیں
+	// 2. آئی ڈی کو میموری کیش میں محفوظ کریں (تاکہ بار بار کلین نہ کرنا پڑے)
 	clientsMutex.Lock()
 	botCleanIDCache[rawID] = cleanID
 	clientsMutex.Unlock()
 
-	// 2. ریڈیس سے پریفکس اٹھائیں
+	// 3. ریڈیس (Redis) سے اس بوٹ کا مخصوص پریفکس اٹھائیں
+	// یہاں 'ctx' وہ ہے جو ہم نے main.go میں گلوبل ڈیفائن کیا ہے
 	p, err := rdb.Get(ctx, "prefix:"+cleanID).Result()
-	if err != nil { p = "." } // اگر نہیں ہے تو ڈیفالٹ
+	if err != nil {
+		p = "." // اگر ریڈیس میں نہیں ہے تو ڈاٹ (.) ڈیفالٹ رکھیں
+	}
 	
+	// 4. پریفکس کو میموری میں کیش کریں (الٹرا فاسٹ ایکسیس کے لئے)
 	prefixMutex.Lock()
 	botPrefixes[cleanID] = p
 	prefixMutex.Unlock()
 
-	// ڈپلیکیٹ چیک
+	// 5. ڈپلیکیٹ چیک: اگر یہ بوٹ پہلے سے چل رہا ہے تو دوبارہ کنیکٹ نہ کریں
 	clientsMutex.RLock()
 	_, exists := activeClients[cleanID]
 	clientsMutex.RUnlock()
-	if exists { return }
-
-	client := whatsmeow.NewClient(device, waLog.Stdout("Client", "ERROR", true))
-	client.AddEventHandler(func(evt interface{}) { handler(client, evt) })
-
-	if err := client.Connect(); err != nil {
-		fmt.Printf("❌ [CONNECT ERROR] %s: %v\n", cleanID, err)
+	if exists {
+		fmt.Printf("⚠️ [MULTI-BOT] Bot %s is already active. Skipping...\n", cleanID)
 		return
 	}
 
+	// 6. نیا واٹس ایپ کلائنٹ تیار کریں
+	clientLog := waLog.Stdout("Client", "ERROR", true)
+	newBotClient := whatsmeow.NewClient(device, clientLog)
+	
+	// ایونٹ ہینڈلر جوڑیں
+	newBotClient.AddEventHandler(func(evt interface{}) {
+		handler(newBotClient, evt)
+	})
+
+	// 7. کنکشن قائم کریں
+	err = newBotClient.Connect()
+	if err != nil {
+		fmt.Printf("❌ [CONNECT ERROR] Bot %s: %v\n", cleanID, err)
+		return
+	}
+
+	// 8. ایکٹو کلائنٹس کی لسٹ میں شامل کریں
 	clientsMutex.Lock()
-	activeClients[cleanID] = client
+	activeClients[cleanID] = newBotClient
 	clientsMutex.Unlock()
 
-	fmt.Printf("✅ [CONNECTED] Bot: %s | Prefix: %s\n", cleanID, p)
+	// 9. کامیابی کا پیغام (اب یہ اسپیڈ میں ہوگا)
+	fmt.Printf("✅ [CONNECTED] Bot: %s | Prefix: %s | Status: Ready\n", cleanID, p)
 }
 
 // ✅ ⚡ ریڈیس پریفکس اپڈیٹ (مونگو ڈی بی ریپلیسمنٹ)
