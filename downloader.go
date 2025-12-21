@@ -41,19 +41,73 @@ func handleTikTok(client *whatsmeow.Client, v *events.Message, url string) {
 ╚═══════════════`
 	replyMessage(client, v, msg)
 
-	type R struct {
+	// 1. اے پی آئی رسپانس کے مطابق اسٹرکٹ
+	type TikTokResponse struct {
+		Code int `json:"code"`
 		Data struct {
-			Play string `json:"play"`
+			Play  string `json:"play"`
+			Title string `json:"title"`
+			Size  uint64 `json:"size"`
 		} `json:"data"`
 	}
-	var r R
-	err := getJson("https://www.tikwm.com/api/?url="+url, &r)
+
+	var r TikTokResponse
+	apiUrl := "https://www.tikwm.com/api/?url=" + url
+	fmt.Printf("📡 [TIKTOK] Fetching: %s\n", apiUrl)
 	
-	if err == nil && r.Data.Play != "" {
-		sendVideo(client, v, r.Data.Play, "🎵 *TikTok Video*\n✅ Successfully Downloaded")
+	err := getJson(apiUrl, &r)
+	
+	// 2. ڈیٹا چیک کریں (Code 0 کا مطلب کامیابی ہے)
+	if err == nil && r.Code == 0 && r.Data.Play != "" {
+		fmt.Printf("✅ [TIKTOK] API Success! Video Size: %d bytes\n", r.Data.Size)
+		
+		caption := fmt.Sprintf("🎬 *TIKTOK DOWNLOAD*\n\n📝 *Title:* %s\n\n✅ Successfully Downloaded", r.Data.Title)
+		
+		// ویڈیو ڈاؤن لوڈ اور سینڈ کریں
+		sendTikTokVideo(client, v, r.Data.Play, caption, r.Data.Size)
 	} else {
-		replyMessage(client, v, "╔═══════════════╗\n║ ❌ FAILED\n╠═══════════════\n║ Download failed.\n║ Check URL.\n╚═══════════════")
+		fmt.Printf("❌ [TIKTOK] API Failed. Code: %d\n", r.Code)
+		errMsg := `╔═══════════════╗
+║ ❌ FAILED
+╠═══════════════
+║ Could not fetch
+║ video. Invalid link
+╚═══════════════`
+		replyMessage(client, v, errMsg)
 	}
+}
+
+// ٹک ٹاک کے لیے مخصوص ویڈیو سینڈر (تاکہ سائز اے پی آئی سے ہی مل جائے)
+func sendTikTokVideo(client *whatsmeow.Client, v *events.Message, videoURL, caption string, size uint64) {
+	resp, err := http.Get(videoURL)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+	if len(data) == 0 { return }
+
+	up, err := client.Upload(context.Background(), data, whatsmeow.MediaVideo)
+	if err != nil { return }
+
+	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+		VideoMessage: &waProto.VideoMessage{
+			URL:           proto.String(up.URL),
+			DirectPath:    proto.String(up.DirectPath),
+			MediaKey:      up.MediaKey,
+			Mimetype:      proto.String("video/mp4"),
+			FileSHA256:    up.FileSHA256,
+			FileEncSHA256: up.FileEncSHA256,
+			FileLength:    proto.Uint64(uint64(len(data))), // یہاں اصل ڈیٹا کی لمبائی استعمال کریں
+			Caption:       proto.String(caption),
+			ContextInfo: &waProto.ContextInfo{
+				StanzaID:      proto.String(v.Info.ID),
+				Participant:   proto.String(v.Info.Sender.String()),
+				QuotedMessage: v.Message,
+			},
+		},
+	})
 }
 
 func handleFacebook(client *whatsmeow.Client, v *events.Message, url string) {
