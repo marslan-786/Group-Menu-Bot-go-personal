@@ -27,6 +27,7 @@ var (
 	dbContainer *sqlstore.Container
 	botPrefixes = make(map[string]string) 
     prefixMutex sync.RWMutex
+    prefixCache = sync.Map{}
 )
 
 func handler(botClient *whatsmeow.Client, evt interface{}) {
@@ -76,7 +77,7 @@ func isKnownCommand(text string) bool {
 }
 
 func processMessage(client *whatsmeow.Client, v *events.Message) {
-	// 1. بنیادی ویری ایبلز (صرف ایک بار ڈکلیئر کریں)
+	// 1. بنیادی ویری ایبلز (صرف ایک بار ڈکلیئر کریں - الٹرا فاسٹ پروسیسنگ کے لئے)
 	botID := getBotLIDFromDB(client)
 	chatID := v.Info.Chat.String()
 	senderID := v.Info.Sender.String()
@@ -84,10 +85,10 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	bodyRaw := getText(v.Message)
 	bodyClean := strings.TrimSpace(bodyRaw)
 	
-	// اس بوٹ کا مخصوص پریفکس ڈیٹا بیس/میموری سے حاصل کریں
+	// 🛠️ بوٹ کا مخصوص پریفکس ڈیٹا بیس/میموری سے حاصل کریں (Bot-Specific Isolation)
 	prefix := getPrefix(botID)
 
-	// 🛠️ اسپیڈ بوسٹ فلٹر (Early Exit)
+	// 🛠️ ⚡ اسپیڈ بوسٹ فلٹر (Early Exit)
 	// اگر پریفکس نہیں ہے اور یہ کوئی ایکٹیو سلیکشن (Interactive) بھی نہیں ہے، تو بوٹ یہیں رک جائے گا
 	_, isTT := ttCache[senderID]
 	_, isYTS := ytCache[senderID]
@@ -95,7 +96,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	isSetup := false
 	if state, ok := setupMap[senderID]; ok && state.GroupID == chatID { isSetup = true }
 
-	// ⚡ الٹرا سپیڈ چیک: اگر کام کی چیز نہیں ہے تو ریم ضائع نہ کرو
+	// 🚀 گروپ ٹریفک فلٹر: اگر کام کی چیز نہیں ہے تو ریم اور سی پی یو ضائع نہ کرو
 	if !strings.HasPrefix(bodyClean, prefix) && !isTT && !isYTS && !isYTSelect && !isSetup && chatID != "status@broadcast" {
 		return 
 	}
@@ -106,7 +107,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		return
 	}
 
-	// 3. اسٹیٹس براڈکاسٹ (Auto Status View/React) - یہ آپ کا اصل کوڈ ہے
+	// 3. اسٹیٹس براڈکاسٹ (Auto Status View/React) - آپ کا اوریجنل کوڈ بالکل ویسے ہی
 	if chatID == "status@broadcast" {
 		dataMutex.RLock()
 		if data.AutoStatus {
@@ -136,7 +137,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	}
 
 	// 6. 🛠️ انٹرایکٹو آپشنز ہینڈلر (TikTok/YouTube Selection)
-	// ٹک ٹاک سلیکشن - آپ کا اوریجنل کارڈ اسٹائل
+	// ٹک ٹاک سلیکشن - آپ کا اوریجنل کارڈ اسٹائل (محفوظ ہے)
 	if isTT {
 		state := ttCache[senderID]
 		if bodyClean == "1" {
@@ -152,7 +153,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		} else if bodyClean == "3" {
 			delete(ttCache, senderID)
 			infoMsg := fmt.Sprintf(`╔═══════════════════╗
-║ 📄 TIKTOK INFO      
+║ 📄 TIKTOK INFO      
 ╠═══════════════════╣
 ║ 📝 Title: %s
 ║ 📊 Size: %.2f MB
@@ -177,7 +178,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 
 	// یوٹیوب فارمیٹ سلیکشن (360p, 720p, etc.)
 	if state, exists := ytDownloadCache[chatID]; exists {
-		if senderID != state.SenderID { return } // صرف وہی بندہ جس نے کمانڈ دی
+		if senderID != state.SenderID { return } // ٹوسٹ: صرف وہی بندہ جس نے کمانڈ دی
 
 		if bodyClean == "1" || bodyClean == "2" || bodyClean == "3" {
 			delete(ytDownloadCache, chatID)
@@ -203,8 +204,10 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		return
 	}
 
-	// 9. کنسول لاگنگ (جو آپ کو چاہیے تھی)
+	// 9. کنسول لاگنگ (پروفیشنل ٹریکنگ)
 	fmt.Printf("📩 [BOT: %s] [PREFIX: %s] CMD: %s | User: %s | Chat: %s\n", botID, prefix, cmd, v.Info.Sender.User, chatID)
+
+	// --- یہاں سے نیچے آپ کا 'switch cmd {' شروع ہوگا ---
 
 	// --- اب یہاں سے آپ کا 'switch cmd {' شروع ہوگا ---
 
@@ -793,6 +796,9 @@ func ConnectNewSession(device *store.Device) {
     // ConnectNewSession کے اندر جہاں بوٹ آئی ڈی ملتی ہے:
     prefixFromDB := fetchPrefixFromMongo(botID) 
     botPrefixes[botID] = prefixFromDB
+    // ConnectNewSession کے اندر جہاں بوٹ آئی ڈی ملتی ہے:
+    botPrefix := fetchPrefixFromMongo(botID)
+    prefixCache.Store(botID, botPrefix)
 
 	// 🛡️ ڈپلیکیٹ چیک: اگر پہلے سے لسٹ میں ہے تو واپس چلے جاؤ
 	clientsMutex.RLock()
