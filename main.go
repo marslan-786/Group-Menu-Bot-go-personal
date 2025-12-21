@@ -41,6 +41,7 @@ var (
 	prefixMutex     sync.RWMutex
 	clientsMutex    sync.RWMutex
 	activeClients   = make(map[string]*whatsmeow.Client)
+	globalClient *whatsmeow.Client // ✅ یہ لائن لازمی ہونی چاہئے
 )
 
 // ✅ 1. ریڈیس کنکشن (سائنس دانوں کو حیران کرنے کے لئے)

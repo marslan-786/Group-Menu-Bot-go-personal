@@ -48,6 +48,4 @@ var (
 	data       BotData
 	dataMutex  sync.RWMutex
 	setupMap   = make(map[string]*SetupState)
-	groupCache = make(map[string]*GroupSettings)
-	cacheMutex sync.RWMutex
 )
