@@ -318,13 +318,6 @@ func handleYTDownload(client *whatsmeow.Client, v *events.Message, ytUrl, format
 // ٹک ٹاک کا ڈیٹا عارضی طور پر محفوظ کرنے کے لیے (Global)
 var ttCache = make(map[string]TTState)
 
-type TTState struct {
-	PlayURL  string
-	MusicURL string
-	Title    string
-	Size     uint64
-}
-
 func handleTikTok(client *whatsmeow.Client, v *events.Message, urlStr string) {
 	if urlStr == "" {
 		msg := `╔═══════════════╗
@@ -469,7 +462,7 @@ func handleFacebook(client *whatsmeow.Client, v *events.Message, url string) {
 
 	// یوزر کے لئے آپشن مینو (میٹا ڈیٹا محفوظ کر کے)
 	senderID := v.Info.Sender.String()
-	ttCache[senderID] = TikTokState{ // ہم TikTokState والا اسٹرکچر ہی استعمال کر لیتے ہیں
+	ttCache[senderID] = TTState{ 
 		Title:    metadata.Title,
 		PlayURL:  metadata.Url,
 		MusicURL: metadata.Url, // FB میں آڈیو کے لئے بھی وہی لنک کام کر جاتا ہے اکثر
