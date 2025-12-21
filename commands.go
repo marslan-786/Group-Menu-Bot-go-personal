@@ -15,21 +15,12 @@ import (
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
-	
-	// ✅ MongoDB نکال کر Redis امپورٹ کر دیا گیا ہے
-	"github.com/redis/go-redis/v9"
 )
 
 var (
 	activeClients = make(map[string]*whatsmeow.Client)
 	clientsMutex  sync.RWMutex
 	globalClient *whatsmeow.Client
-	persistentUptime int64
-	dbContainer *sqlstore.Container
-	botPrefixes = make(map[string]string) 
-	prefixMutex sync.RWMutex
-	prefixCache = sync.Map{}
-	botCleanIDCache = make(map[string]string) // کلین آئی ڈی میموری میں رکھنے کے لئے
 )
 
 func handler(botClient *whatsmeow.Client, evt interface{}) {
@@ -350,15 +341,6 @@ func getPrefix(botID string) string {
 }
 
 // 3. ریڈیس میں پریفکس اپڈیٹ کرنے والا فنکشن
-func updatePrefixDB(botID string, newPrefix string) {
-	prefixMutex.Lock()
-	botPrefixes[botID] = newPrefix
-	prefixMutex.Unlock()
-
-	if rdb != nil {
-		rdb.Set(context.Background(), "prefix:"+botID, newPrefix, 0)
-	}
-}
 
 // 🚀 الٹرا فاسٹ ہیلپرز
 
@@ -780,36 +762,6 @@ func saveGroupSettings(s *GroupSettings) {
 	groupCache[s.ChatID] = s
 	cacheMutex.Unlock()
 }
-
-func ConnectNewSession(device *store.Device) {
-	// ⚡ اسٹارٹ اپ پر ہی آئی ڈی کلین کر کے میموری میں رکھ لیں
-	botID := getCleanID(device.ID.User)
-	
-	// پریفکس ریڈیس سے لوڈ کریں اور کیش میں ڈالیں
-	p := fetchPrefixFromRedis(botID)
-	prefixMutex.Lock()
-	botPrefixes[botID] = p
-	prefixMutex.Unlock()
-	
-	// آئی ڈی کیش کریں
-	botCleanIDCache[device.ID.User] = botID 
-
-	// باقی کنکشن لاجک
-	clientsMutex.RLock()
-	_, exists := activeClients[botID]
-	clientsMutex.RUnlock()
-	if exists { return }
-
-	client := whatsmeow.NewClient(device, waLog.Stdout("Client", "ERROR", true))
-	client.AddEventHandler(func(evt interface{}) { handler(client, evt) })
-
-	if err := client.Connect(); err != nil { return }
-
-	clientsMutex.Lock()
-	activeClients[botID] = client
-	clientsMutex.Unlock()
-}
-
 
 
 func StartAllBots(container *sqlstore.Container) {

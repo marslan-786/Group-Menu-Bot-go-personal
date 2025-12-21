@@ -13,9 +13,6 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	
-	// ✅ مونگو ڈی بی نکال کر ریڈیس لائبریری شامل کر دی گئی ہے
-	"github.com/redis/go-redis/v9"
 )
 
 // ════════════════════════════════════════════════════════════════
