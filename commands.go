@@ -299,9 +299,11 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	case "yts":
 		handleYTS(client, v, fullArgs)
 	case "ytmp4":
-		handleYTDownload(client, v, fullArgs, true)
+		// اب یہ براہ راست ڈاؤن لوڈ کے بجائے مینو دکھائے گا تاکہ یوزر ریزولوشن چن سکے
+		handleYTDownloadMenu(client, v, fullArgs)
 	case "ytmp3":
-		handleYTDownload(client, v, fullArgs, false)
+		// یہاں ہم نے 5 آرگیومنٹس پورے کر دیے ہیں (format کو "mp3" اور isAudio کو true کر دیا)
+		handleYTDownload(client, v, fullArgs, "mp3", true)
 	}
 }
 

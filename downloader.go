@@ -30,23 +30,23 @@ type YTState struct {
 }
 
 var ytCache = make(map[string][]YTSResult)        // سرچ رزلٹس کے لیے
-var ytDownloadCache = make(map[string]YTState)    // ڈاؤن لوڈ سلیکشن کے لیے
+var ytDownloadCache = make(map[string]YTState)    // ڈاؤن لوڈ سلیکشن کے لی
 
-// 1. یوٹیوب سرچ (YTS) - yt-dlp کے ذریعے
+// 1. یوٹیوب سرچ (YTS) - 32GB RAM Power
 func handleYTS(client *whatsmeow.Client, v *events.Message, query string) {
 	if query == "" {
-		replyMessage(client, v, "⚠️ Please provide a search term.")
+		replyMessage(client, v, "╔═══════════════════╗\n║ ⚠️ SEARCH ERROR      \n╠═══════════════════╣\n║ Please provide a    \n║ search term.        \n╚═══════════════════╝")
 		return
 	}
 	react(client, v.Info.Chat, v.Info.ID, "🔍")
 
-	// yt-dlp سے ٹائٹل اور آئی ڈی نکالنا
-	cmd := exec.Command("yt-dlp", "ytsearch5:"+query, "--get-title", "--get-id")
+	// yt-dlp کا استعمال کرتے ہوئے تیز ترین سرچ
+	cmd := exec.Command("yt-dlp", "ytsearch5:"+query, "--get-title", "--get-id", "--no-playlist")
 	out, _ := cmd.Output()
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 
 	if len(lines) < 2 {
-		replyMessage(client, v, "❌ No results found.")
+		replyMessage(client, v, "❌ No results found on YouTube.")
 		return
 	}
 
@@ -68,12 +68,17 @@ func handleYTS(client *whatsmeow.Client, v *events.Message, query string) {
 	replyMessage(client, v, menuText)
 }
 
-// 2. ڈاؤن لوڈ آپشنز مینو دکھانا
+// 2. ڈاؤن لوڈ مینو (Resolution Selection)
 func handleYTDownloadMenu(client *whatsmeow.Client, v *events.Message, ytUrl string) {
+	if ytUrl == "" {
+		replyMessage(client, v, "⚠️ Please provide a YouTube link.")
+		return
+	}
 	react(client, v.Info.Chat, v.Info.ID, "🎥")
 	
-	cmd := exec.Command("yt-dlp", "--get-title", ytUrl)
-	titleOut, _ := cmd.Output()
+	// ویڈیو کا ٹائٹل نکالنا
+	titleCmd := exec.Command("yt-dlp", "--get-title", ytUrl)
+	titleOut, _ := titleCmd.Output()
 	title := strings.TrimSpace(string(titleOut))
 
 	chatID := v.Info.Chat.String()
@@ -89,22 +94,23 @@ func handleYTDownloadMenu(client *whatsmeow.Client, v *events.Message, ytUrl str
 ║
 ║ 📝 *Title:* %s
 ║
-║ [1] 📺 360p (Low)
-║ [2] 🎬 720p (HD)
+║ [1] 📺 360p (Data Saver)
+║ [2] 🎬 720p (High Def)
 ║ [3] 🎥 1080p (Full HD)
 ║ [4] 🎵 MP3 Audio
 ║
 ╠════════════════════╣
-║ 👤 Locked to You
+║ 👤 Locked to: YOU
 ╚════════════════════╝`, title)
 	replyMessage(client, v, menu)
 }
 
-// 3. اصل ڈاؤن لوڈر (YT-DLP Power)
+// 3. ماسٹر ڈاؤن لوڈر فنکشن (yt-dlp Implementation)
 func handleYTDownload(client *whatsmeow.Client, v *events.Message, ytUrl, format string, isAudio bool) {
 	react(client, v.Info.Chat, v.Info.ID, "⏳")
 	
-	fileName := fmt.Sprintf("dl_%s", v.Info.ID)
+	// فائل کا نام یونیک رکھیں تاکہ کنفلکٹ نہ ہو
+	fileName := fmt.Sprintf("dl_%d_%s", os.Getpid(), v.Info.ID)
 	var args []string
 
 	if isAudio {
@@ -112,36 +118,53 @@ func handleYTDownload(client *whatsmeow.Client, v *events.Message, ytUrl, format
 		args = []string{"-f", "bestaudio", "--extract-audio", "--audio-format", "mp3", "-o", fileName, ytUrl}
 	} else {
 		fileName += ".mp4"
+		// ریزولوشن لاجک
 		res := "360"
 		if format == "2" { res = "720" } else if format == "3" { res = "1080" }
 		args = []string{"-f", fmt.Sprintf("bestvideo[height<=%s]+bestaudio/best[height<=%s]", res, res), "--merge-output-format", "mp4", "-o", fileName, ytUrl}
 	}
 
+	// 🚀 32GB RAM کا فائدہ: لوکل پروسیسنگ
 	cmd := exec.Command("yt-dlp", args...)
 	err := cmd.Run()
 	if err != nil {
-		replyMessage(client, v, "❌ yt-dlp error: Could not process video.")
+		fmt.Printf("❌ [YT-DLP ERR] %v\n", err)
+		replyMessage(client, v, "❌ Failed to process media. Link might be restricted.")
 		return
 	}
 
-	data, _ := os.ReadFile(fileName)
-	if len(data) == 0 { return }
+	data, err := os.ReadFile(fileName)
+	if err != nil || len(data) == 0 {
+		replyMessage(client, v, "❌ Error reading downloaded file.")
+		return
+	}
+
+	// فائل سائز چیک کریں (WhatsApp Limit)
+	if len(data) > 100*1024*1024 { // 100MB
+		replyMessage(client, v, "⚠️ File is too large to send via WhatsApp.")
+		os.Remove(fileName)
+		return
+	}
 
 	if isAudio {
-		sendDocument(client, v, "", fileName, "audio/mpeg")
+		sendDocument(client, v, "", fileName, "audio/mpeg") // آپ کا موجودہ ڈاکومنٹ سینڈر
 	} else {
-		up, _ := client.Upload(context.Background(), data, whatsmeow.MediaVideo)
+		up, err := client.Upload(context.Background(), data, whatsmeow.MediaVideo)
+		if err != nil { return }
+
 		client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 			VideoMessage: &waProto.VideoMessage{
 				URL:        proto.String(up.URL),
 				DirectPath: proto.String(up.DirectPath),
 				MediaKey:   up.MediaKey,
 				Mimetype:   proto.String("video/mp4"),
-				FileLength: proto.Uint64(uint64(len(data))),
-				Caption:    proto.String("✅ Downloaded via yt-dlp"),
+				FileLength: proto.Uint64(uint64(len(data))), // ڈیلیوری فکس
+				Caption:    proto.String("✅ Successfully Downloaded via *Impossible Power*"),
 			},
 		})
 	}
+	
+	// صفائی (Cleanup)
 	os.Remove(fileName)
 }
 
