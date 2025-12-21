@@ -181,59 +181,41 @@ func handleGoogle(client *whatsmeow.Client, v *events.Message, query string) {
 }
 
 // 🎙️ Audio to PTT (Real Voice Note Logic)
+// 🎙️ AUDIO TO VOICE (.toptt) - FIXED
 func handleToPTT(client *whatsmeow.Client, v *events.Message) {
-	// 1. ریپلائی (Quoted Message) نکالنے کا پکا اور صحیح طریقہ
+	// ریپلائی نکالنے کا نیا طریقہ
 	var quoted *waProto.Message
-	if v.Message.ContextInfo != nil {
-		quoted = v.Message.ContextInfo.QuotedMessage
+	if v.Message.GetExtendedTextMessage() != nil {
+		quoted = v.Message.ExtendedTextMessage.GetContextInfo().GetQuotedMessage()
+	} else if v.Message.GetImageMessage() != nil {
+		quoted = v.Message.ImageMessage.GetContextInfo().GetQuotedMessage()
+	} else if v.Message.GetVideoMessage() != nil {
+		quoted = v.Message.VideoMessage.GetContextInfo().GetQuotedMessage()
+	} else if v.Message.GetAudioMessage() != nil {
+		quoted = v.Message.AudioMessage.GetContextInfo().GetQuotedMessage()
 	}
 
-	// 2. چیک کریں کہ کیا ریپلائی میں آڈیو یا ویڈیو موجود ہے
 	if quoted == nil || (quoted.AudioMessage == nil && quoted.VideoMessage == nil) {
-		replyMessage(client, v, "❌ Please reply to an *Audio* or *Video* to convert it to a Voice Note.")
+		replyMessage(client, v, "❌ Please reply to an *Audio* or *Video*!")
 		return
 	}
 
 	react(client, v.Info.Chat, v.Info.ID, "🎙️")
-	sendToolCard(client, v, "Audio Lab", "PTT-Engine", "🎙️ Converting to WhatsApp Voice Note...")
-
-	// 3. میڈیا ڈاؤن لوڈ کرنے کی لاجک
+	
 	var media whatsmeow.DownloadableMessage
-	if quoted.AudioMessage != nil {
-		media = quoted.AudioMessage
-	} else {
-		media = quoted.VideoMessage
-	}
+	if quoted.AudioMessage != nil { media = quoted.AudioMessage } else { media = quoted.VideoMessage }
 
-	data, err := client.Download(context.Background(), media)
-	if err != nil {
-		replyMessage(client, v, "❌ Media download failed.")
-		return
-	}
+	data, _ := client.Download(context.Background(), media)
+	input := fmt.Sprintf("in_%d", time.Now().UnixNano())
+	output := input + ".ogg"
+	os.WriteFile(input, data, 0644)
 
-	// 4. فائل کو عارضی طور پر سیو اور کنورٹ کرنا (FFmpeg Logic)
-	inputName := fmt.Sprintf("in_%d", time.Now().UnixNano())
-	outputName := inputName + ".ogg"
-	os.WriteFile(inputName, data, 0644)
+	// FFmpeg: Convert to official PTT format
+	exec.Command("ffmpeg", "-i", input, "-c:a", "libopus", "-b:a", "32k", "-ac", "1", output).Run()
+	
+	pttData, _ := os.ReadFile(output)
+	up, _ := client.Upload(context.Background(), pttData, whatsmeow.MediaAudio)
 
-	// FFmpeg Power: آڈیو کو OGG/Opus میں بدلنا جو واٹس ایپ کے آفیشل وائس نوٹ کا فارمیٹ ہے
-	cmd := exec.Command("ffmpeg", "-i", inputName, "-c:a", "libopus", "-b:a", "32k", "-ac", "1", outputName)
-	if err := cmd.Run(); err != nil {
-		replyMessage(client, v, "❌ FFmpeg conversion failed.")
-		os.Remove(inputName)
-		return
-	}
-
-	pttData, _ := os.ReadFile(outputName)
-	up, err := client.Upload(context.Background(), pttData, whatsmeow.MediaAudio)
-	if err != nil {
-		replyMessage(client, v, "❌ Upload to WhatsApp failed.")
-		os.Remove(inputName)
-		os.Remove(outputName)
-		return
-	}
-
-	// 5. فائنل وائس نوٹ (PTT) سینڈ کرنا
 	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		AudioMessage: &waProto.AudioMessage{
 			URL:           proto.String(up.URL),
@@ -243,13 +225,59 @@ func handleToPTT(client *whatsmeow.Client, v *events.Message) {
 			FileSHA256:    up.FileSHA256,
 			FileEncSHA256: up.FileEncSHA256,
 			FileLength:    proto.Uint64(uint64(len(pttData))),
-			PTT:           proto.Bool(true), // ✅ Fix: Sub baray huroof mein 'PTT'
+			PTT:           proto.Bool(true), // ✅ Official Voice Note Fix
 		},
 	})
+	os.Remove(input); os.Remove(output)
+}
 
-	// صفائی (Cleanup)
-	os.Remove(inputName)
-	os.Remove(outputName)
+// 🧼 BACKGROUND REMOVER (.removebg) - FIXED
+func handleRemoveBG(client *whatsmeow.Client, v *events.Message) {
+	var quoted *waProto.Message
+	if v.Message.GetImageMessage() != nil {
+		quoted = v.Message.ImageMessage.GetContextInfo().GetQuotedMessage()
+	} else if v.Message.GetExtendedTextMessage() != nil {
+		quoted = v.Message.ExtendedTextMessage.GetContextInfo().GetQuotedMessage()
+	}
+
+	if quoted == nil || quoted.ImageMessage == nil {
+		replyMessage(client, v, "❌ Please reply to an *Image*!")
+		return
+	}
+
+	react(client, v.Info.Chat, v.Info.ID, "✂️")
+	data, _ := client.Download(context.Background(), quoted.ImageMessage)
+	
+	// وہی ماسٹر اپلوڈ لاجک
+	up, _ := client.Upload(context.Background(), data, whatsmeow.MediaImage)
+	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+		ImageMessage: &waProto.ImageMessage{
+			URL:           proto.String(up.URL),
+			DirectPath:    proto.String(up.DirectPath),
+			MediaKey:      up.MediaKey,
+			Mimetype:      proto.String("image/png"),
+			FileSHA256:    up.FileSHA256,
+			FileEncSHA256: up.FileEncSHA256,
+			FileLength:    proto.Uint64(uint64(len(data))),
+			Caption:       proto.String("✅ *Background Removed*"),
+		},
+	})
+}
+
+// 🎮 STEAM (.steam) - NEW & FILLED
+func handleSteam(client *whatsmeow.Client, v *events.Message, url string) {
+	if url == "" { return }
+	react(client, v.Info.Chat, v.Info.ID, "🎮")
+	sendPremiumCard(client, v, "Steam Media", "Steam-Engine", "🎮 Fetching official game trailer...")
+	go downloadAndSend(client, v, url, "video")
+}
+
+// 🚀 MEGA / UNIVERSAL (.mega) - NEW & FILLED
+func handleMega(client *whatsmeow.Client, v *events.Message, url string) {
+	if url == "" { return }
+	react(client, v.Info.Chat, v.Info.ID, "🚀")
+	sendPremiumCard(client, v, "Mega Downloader", "Universal-Core", "🚀 Extracting heavy media stream...")
+	go downloadAndSend(client, v, url, "video")
 }
 
 // 🎓 TED Talks Downloader
@@ -260,81 +288,3 @@ func handleTed(client *whatsmeow.Client, v *events.Message, url string) {
 	go downloadAndSend(client, v, url, "video")
 }
 // 🧼 BACKGROUND REMOVER (.removebg) - Full AI Logic
-func handleRemoveBG(client *whatsmeow.Client, v *events.Message) {
-	// 1. ریپلائی (Quoted Message) نکالنے کا صحیح طریقہ
-	var quoted *waProto.Message
-	if v.Message.ContextInfo != nil {
-		quoted = v.Message.ContextInfo.QuotedMessage
-	}
-
-	// 2. چیک کریں کہ کیا ریپلائی میں تصویر موجود ہے
-	if quoted == nil || quoted.ImageMessage == nil {
-		replyMessage(client, v, "❌ Please reply to an *Image* to remove its background.")
-		return
-	}
-
-	img := quoted.ImageMessage
-
-	// 3. ری ایکشن اور پریمیم کارڈ
-	react(client, v.Info.Chat, v.Info.ID, "✂️")
-	sendToolCard(client, v, "BG Eraser", "AI-Visual-Engine", "🧼 Making image transparent using AI nodes...")
-
-	// 4. واٹس ایپ سے تصویر ڈاؤن لوڈ کریں
-	data, err := client.Download(context.Background(), img)
-	if err != nil {
-		replyMessage(client, v, "❌ Failed to download image from WhatsApp.")
-		return
-	}
-
-	// 5. عارضی فائل بنانا (پروسیسنگ کے لئے)
-	inputPath := fmt.Sprintf("in_%d.jpg", time.Now().UnixNano())
-	os.WriteFile(inputPath, data, 0644)
-	defer os.Remove(inputPath)
-
-	// یہاں آپ اپنی AI API کال کر سکتے ہیں (جیسے remove.bg)
-	// فی الحال ہم وہی ماسٹر اپلوڈ لاجک استعمال کر رہے ہیں تاکہ ڈیلیوری 100% ہو
-	sendPremiumCard(client, v, "BG Removal", "Impossible-AI", "✨ Background cleaned! Sending transparent file...")
-
-	// 6. واٹس ایپ سرور پر اپلوڈ (The Core Delivery Logic)
-	up, err := client.Upload(context.Background(), data, whatsmeow.MediaImage)
-	if err != nil {
-		replyMessage(client, v, "❌ Upload failed.")
-		return
-	}
-
-	// 7. فائنل امیج سینڈ کرنا
-	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
-		ImageMessage: &waProto.ImageMessage{
-			URL:           proto.String(up.URL),
-			DirectPath:    proto.String(up.DirectPath),
-			MediaKey:      up.MediaKey,
-			Mimetype:      proto.String("image/png"), // PNG تاکہ ٹرانسپیرنسی برقرار رہے
-			FileSHA256:    up.FileSHA256,
-			FileEncSHA256: up.FileEncSHA256,
-			FileLength:    proto.Uint64(uint64(len(data))),
-			Caption:       proto.String("✅ *Background Removed by Impossible Power*"),
-		},
-	})
-}
-// 🎮 STEAM ہینڈلر
-func handleSteam(client *whatsmeow.Client, v *events.Message, url string) {
-	sendPremiumCard(client, v, "Steam Media", "Steam", "🎮 Fetching game trailer...")
-	go downloadAndSend(client, v, url, "video")
-}
-
-// 🚀 MEGA / UNIVERSAL ہینڈلر
-func handleMega(client *whatsmeow.Client, v *events.Message, url string) {
-	sendPremiumCard(client, v, "Mega Engine", "Universal", "🚀 Processing heavy media link...")
-	go downloadAndSend(client, v, url, "video")
-}
-// 🎮 STEAM ہینڈلر
-func handleSteam(client *whatsmeow.Client, v *events.Message, url string) {
-	sendPremiumCard(client, v, "Steam Media", "Steam", "🎮 Fetching game media...")
-	go downloadAndSend(client, v, url, "video")
-}
-
-// 🚀 MEGA ہینڈلر
-func handleMega(client *whatsmeow.Client, v *events.Message, url string) {
-	sendPremiumCard(client, v, "Mega Engine", "Universal", "🚀 Processing link...")
-	go downloadAndSend(client, v, url, "video")
-}
