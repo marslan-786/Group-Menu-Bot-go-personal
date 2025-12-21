@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url" // ✅ یہ مسنگ تھا
+	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 
 	"go.mau.fi/whatsmeow"
@@ -14,6 +16,113 @@ import (
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"google.golang.org/protobuf/proto"
 )
+
+// سیشن ٹریکنگ: صرف وہی بندہ جواب دے سکے جس نے کمانڈ دی
+type YTState struct {
+	Url      string
+	Title    string
+	SenderID string // جس نے کمانڈ شروع کی
+}
+
+var ytDownloadCache = make(map[string]YTState) // Key: ChatID
+
+// 1. یوٹیوب سرچ (YTS)
+func handleYTS(client *whatsmeow.Client, v *events.Message, query string) {
+	if query == "" {
+		replyMessage(client, v, "⚠️ Search term required!")
+		return
+	}
+	react(client, v.Info.Chat, v.Info.ID, "🔍")
+	
+	// ہم yt-dlp کا استعمال کریں گے جو بہت تیز ہے
+	cmd := exec.Command("yt-dlp", "ytsearch5:"+query, "--get-title", "--get-id")
+	out, _ := cmd.Output()
+	lines := strings.Split(string(out), "\n")
+
+	menu := "╔════════════════════╗\n║  📺 YOUTUBE SEARCH      \n╠════════════════════╣\n"
+	for i := 0; i < len(lines)-1; i += 2 {
+		menu += fmt.Sprintf("║ [%d] %s\n", (i/2)+1, lines[i])
+	}
+	menu += "╚════════════════════╝\n💡 Copy link and use .ytmp4"
+	replyMessage(client, v, menu)
+}
+
+// 2. یوٹیوب ڈاؤنلوڈر مینو (ytmp4)
+func handleYTVideoMenu(client *whatsmeow.Client, v *events.Message, ytUrl string) {
+	if ytUrl == "" {
+		replyMessage(client, v, "⚠️ Link required!")
+		return
+	}
+	react(client, v.Info.Chat, v.Info.ID, "🎥")
+
+	// ویڈیو ٹائٹل حاصل کریں
+	titleCmd := exec.Command("yt-dlp", "--get-title", ytUrl)
+	titleOut, _ := titleCmd.Output()
+	title := strings.TrimSpace(string(titleOut))
+
+	chatID := v.Info.Chat.String()
+	ytDownloadCache[chatID] = YTState{
+		Url:      ytUrl,
+		Title:    title,
+		SenderID: v.Info.Sender.String(), // یوزر آئی ڈی لاک کر دی
+	}
+
+	menu := fmt.Sprintf(`╔════════════════════╗
+║   📺 VIDEO SELECTOR      
+╠════════════════════╣
+║
+║ 📝 *Title:* %s
+║
+║ [1] 📺 360p (Low)
+║ [2] 🎬 720p (HD)
+║ [3] 🎥 1080p (Full HD)
+║ [4] 🎵 MP3 Audio
+║
+╠════════════════════╣
+║ 👤 Requested by: You
+╚════════════════════╝`, title)
+	replyMessage(client, v, menu)
+}
+
+// 3. اصل ڈاؤن لوڈر فنکشن (جو yt-dlp چلائے گا)
+func downloadAndSendYT(client *whatsmeow.Client, v *events.Message, ytUrl, format string, isAudio bool) {
+	react(client, v.Info.Chat, v.Info.ID, "⏳")
+	fileName := fmt.Sprintf("dl_%s", v.Info.ID)
+	if isAudio {
+		fileName += ".mp3"
+		exec.Command("yt-dlp", "-f", "bestaudio", "--extract-audio", "--audio-format", "mp3", "-o", fileName, ytUrl).Run()
+	} else {
+		fileName += ".mp4"
+		// مخصوص ریزولوشن سلیکشن
+		res := "360"
+		if format == "2" { res = "720" } else if format == "3" { res = "1080" }
+		exec.Command("yt-dlp", "-f", fmt.Sprintf("bestvideo[height<=%s]+bestaudio/best[height<=%s]", res, res), "--merge-output-format", "mp4", "-o", fileName, ytUrl).Run()
+	}
+
+	data, err := os.ReadFile(fileName)
+	if err != nil {
+		replyMessage(client, v, "❌ Download failed or file too large.")
+		return
+	}
+
+	if isAudio {
+		sendDocument(client, v, "", fileName, "audio/mpeg") // Local file sending logic needed or adapt existing
+	} else {
+		// واٹس ایپ پر اپ لوڈ
+		up, _ := client.Upload(context.Background(), data, whatsmeow.MediaVideo)
+		client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+			VideoMessage: &waProto.VideoMessage{
+				URL:        proto.String(up.URL),
+				DirectPath: proto.String(up.DirectPath),
+				MediaKey:   up.MediaKey,
+				Mimetype:   proto.String("video/mp4"),
+				FileLength: proto.Uint64(uint64(len(data))),
+				Caption:    proto.String("✅ Successfully Downloaded via yt-dlp"),
+			},
+		})
+	}
+	os.Remove(fileName)
+}
 
 // ==================== ڈاؤن لوڈر سسٹم ====================
 
