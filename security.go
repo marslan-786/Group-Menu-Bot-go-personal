@@ -25,8 +25,6 @@ type BotSettings struct {
 	OnlyGroup  bool   `json:"only_group"`
 }
 
-var ctx = context.Background()
-
 // 💾 1. تمام سیٹنگز ریڈیس میں محفوظ کرنا
 func SaveAllSettings(rdb *redis.Client, botID string, settings BotSettings) {
 	// ڈیٹا کو JSON میں بدلیں

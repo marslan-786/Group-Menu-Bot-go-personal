@@ -47,6 +47,7 @@ type SetupState struct {
 	Stage   int
 	GroupID string
 	User    string
+	BotLID  string
 }
 
 // --- 🌍 GLOBAL VARIABLES ---
