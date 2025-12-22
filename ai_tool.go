@@ -738,7 +738,7 @@ func handleMega(client *whatsmeow.Client, v *events.Message, urlStr string) {
 						Title:     proto.String("Impossible Mega Engine"),
 						Body:      proto.String("File: " + fileName),
 						SourceURL: proto.String(urlStr),
-						MediaType: waProto.ContextInfo_ExternalAdReplyInfo_DOCUMENT.Enum(), // میڈیا ٹائپ بھی فکس کر دی
+						MediaType: ContextInfo_ExternalAdReplyInfo_IMAGE.Enum(), // میڈیا ٹائپ بھی فکس کر دی
 					},
 				},
 			},
