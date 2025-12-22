@@ -168,7 +168,8 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 // --- 📺 یوٹیوب سرچ اور ڈاؤنلوڈ ہینڈلنگ (Multi-Bot Proof) ---
 	extMsg := v.Message.GetExtendedTextMessage()
 	if extMsg != nil && extMsg.ContextInfo != nil {
-		quotedID := extMsg.ContextInfo.GetStanzaID()
+		// اگر quotedID پہلے اوپر کہیں بن چکا ہے تو صرف '=' استعمال کریں
+        quotedID = extMsg.ContextInfo.GetStanzaID()
 
 		// 1️⃣ یوٹیوب سرچ رزلٹ کا انتخاب (ytCache)
 		if session, ok := ytCache[quotedID]; ok {

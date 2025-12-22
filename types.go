@@ -30,6 +30,26 @@ type TTState struct {
 	MusicURL string
 	Size     int64
 }
+// یہ یوٹیوب سرچ کا سیشن سنبھالے گا
+type YTSession struct {
+	Results  []YTSResult
+	SenderID string
+	BotLID   string
+}
+
+// یہ ڈاؤنلوڈ مینیو (MP3/MP4) کا اسٹیٹ سنبھالے گا
+type YTState struct {
+	Url      string
+	Title    string
+	SenderID string
+	BotLID   string // ✅ یہ فیلڈ ایڈ کر دی
+}
+
+// اگر YTSResult پہلے سے نہیں ہے تو اسے بھی ڈال دیں
+type YTSResult struct {
+	Title string
+	Url   string
+}
 
 type BotData struct {
 	ID            string   `bson:"_id" json:"id"`
