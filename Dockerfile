@@ -1,14 +1,11 @@
 # ═══════════════════════════════════════════════════════════
-# 1. Stage: Go Builder
+# 1. Stage: Go Builder (یہ ویسا ہی رہے گا)
 # ═══════════════════════════════════════════════════════════
 FROM golang:1.24-alpine AS go-builder
-
 RUN apk add --no-cache gcc musl-dev git sqlite-dev ffmpeg-dev
-
 WORKDIR /app
 COPY . .
 RUN rm -f go.mod go.sum || true
-
 RUN go mod init impossible-bot && \
     go get go.mau.fi/whatsmeow@latest && \
     go get go.mongodb.org/mongo-driver/mongo@latest && \
@@ -21,47 +18,43 @@ RUN go mod init impossible-bot && \
     go get google.golang.org/protobuf/proto@latest && \
     go get github.com/showwin/speedtest-go && \
     go mod tidy
-
 RUN go build -ldflags="-s -w" -o bot .
 
 # ═══════════════════════════════════════════════════════════
-# 2. Stage: Node.js Builder
+# 2. Stage: Node.js Builder (یہ ویسا ہی رہے گا)
 # ═══════════════════════════════════════════════════════════
 FROM node:20-alpine AS node-builder
 RUN apk add --no-cache git 
-
 WORKDIR /app
 COPY package*.json ./
 COPY lid-extractor.js ./
 RUN npm install --production
 
 # ═══════════════════════════════════════════════════════════
-# 3. Stage: Final Runtime (The Powerhouse)
+# 3. Stage: Final Runtime (The Powerhouse - Switch to Python-Slim)
 # ═══════════════════════════════════════════════════════════
-FROM alpine:latest
+FROM python:3.12-slim
 
-# ✅ ضروری لائبریریز: ہم نے libc6-compat اور build-base کا اضافہ کیا ہے تاکہ rembg چل سکے
-RUN apk add --no-cache \
-    ca-certificates \
-    sqlite-libs \
+# ✅ ضروری سسٹم پیکجز (Apt استعمال کریں گے)
+RUN apt-get update && apt-get install -y \
     ffmpeg \
-    python3 \
-    py3-pip \
     curl \
+    sqlite3 \
+    libsqlite3-dev \
     nodejs \
     npm \
-    libc6-compat \
-    libstdc++ \
-    && curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
-    && chmod a+rx /usr/local/bin/yt-dlp \
-    && rm -rf /var/cache/apk/*
+    && rm -rf /var/lib/apt/lists/*
 
-# ✅ rembg انسٹال کریں (اس میں تھوڑا ٹائم لگ سکتا ہے کیونکہ یہ بھاری ہے)
-RUN pip3 install --upgrade pip --break-system-packages && \
-    pip3 install rembg[cli] --break-system-packages
+# ✅ yt-dlp انسٹال کریں
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+    && chmod a+rx /usr/local/bin/yt-dlp
+
+# ✅ rembg انسٹال کریں (اب یہ فوراً ہو جائے گا کیونکہ Wheels دستیاب ہیں)
+RUN pip3 install --no-cache-dir rembg[cli]
 
 WORKDIR /app
 
+# بلڈرز سے ڈیٹا کاپی کریں
 COPY --from=go-builder /app/bot ./bot
 COPY --from=node-builder /app/node_modules ./node_modules
 COPY --from=node-builder /app/lid-extractor.js ./lid-extractor.js
@@ -72,9 +65,9 @@ COPY pic.png ./pic.png
 
 RUN mkdir -p store logs
 
+# 🎯 رن ٹائم انوائرمنٹ
 ENV PORT=8080
 ENV NODE_ENV=production
-# ✅ rembg ماڈل ہوم سیٹ کریں تاکہ وہ 'store' میں ڈاؤن لوڈ ہو سکے
 ENV U2NET_HOME=/app/store/.u2net 
 
 EXPOSE 8080
