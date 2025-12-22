@@ -62,7 +62,6 @@ func isKnownCommand(text string) bool {
 }
 
 func processMessage(client *whatsmeow.Client, v *events.Message) {
-	// 1️⃣ ڈیٹا نکالیں (سارے ویریبلز ترتیب سے)
 	rawBotID := client.Store.ID.User
 	botID := botCleanIDCache[rawBotID]
 	if botID == "" { botID = getCleanID(rawBotID) } 
@@ -75,52 +74,44 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	chatID := v.Info.Chat.String()
 	isGroup := v.Info.IsGroup
 
-	// 🛠️ 2️⃣ ریپلائی آئی ڈی نکالیں
 	var qID string
 	if extMsg := v.Message.GetExtendedTextMessage(); extMsg != nil && extMsg.ContextInfo != nil {
 		qID = extMsg.ContextInfo.GetStanzaID()
 	}
 
-	// 🔍 3️⃣ سیشن چیک (LID اور JID کا رپھڑ ختم)
+	// 🔍 سیشن چیک
 	_, isSetup := setupMap[qID]
 	_, isYTS := ytCache[qID]
 	_, isYTSelect := ytDownloadCache[qID]
-	_, isTT := ttCache[senderID] // ٹک ٹاک کے لیے ابھی فون نمبر ہی ٹھیک ہے
+	_, isTT := ttCache[senderID] // ٹک ٹاک ابھی یوزر آئی ڈی پر ہے
 
-	// 🛡️ 4️⃣ سیکیورٹی چیک (فلٹر سے اوپر)
 	if isGroup { go checkSecurity(client, v) }
 
-	// 🚀 5️⃣ مین فلٹر: اگر ریپلائی ہے تو پریفکس کے بغیر چلنے دے
 	isAnySession := isSetup || isYTS || isYTSelect || isTT
 	if !strings.HasPrefix(bodyClean, prefix) && !isAnySession && chatID != "status@broadcast" {
 		return 
 	}
 
-	// 🎯 6️⃣ ریپلائی پروسیسنگ (YouTube/Setup)
+	// 🎯 ریپلائی ہینڈلنگ
+	if isSetup { handleSetupResponse(client, v); return }
+
 	if qID != "" {
-		// یوٹیوب سرچ رزلٹ لسٹ
-		if session, ok := ytCache[qID]; ok {
-			// ہم صرف میسج آئی ڈی میچ کریں گے تاکہ سیلف بوٹ کا مسئلہ نہ ہو
+		if session, ok := ytCache[qID]; ok && session.BotLID == botID {
 			var idx int
 			fmt.Sscanf(bodyClean, "%d", &idx)
 			if idx >= 1 && idx <= len(session.Results) {
-				delete(ytCache, qID)
-				handleYTDownloadMenu(client, v, session.Results[idx-1].Url)
+				delete(ytCache, qID); handleYTDownloadMenu(client, v, session.Results[idx-1].Url)
 				return
 			}
 		}
-		// یوٹیوب فارمیٹ (Video Selector)
-		if state, ok := ytDownloadCache[qID]; ok {
-			fmt.Printf("🎬 [YT-DL] Format chosen: %s\n", bodyClean)
+		if state, ok := ytDownloadCache[qID]; ok && state.BotLID == botID {
 			delete(ytDownloadCache, qID)
 			go handleYTDownload(client, v, state.Url, bodyClean, (bodyClean == "4"))
 			return
 		}
-		// سیکیورٹی کارڈز
-		if isSetup { handleSetupResponse(client, v); return }
 	}
 
-	// 7️⃣ ٹک ٹاک ہینڈلنگ
+	// 📱 ٹک ٹاک ہینڈلنگ (اب یہ اوپر والے فنکشن کو کال کرے گا)
 	if isTT && !strings.HasPrefix(bodyClean, prefix) {
 		handleTikTokReply(client, v, bodyClean, senderID)
 		return

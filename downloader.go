@@ -39,6 +39,45 @@ func sendPremiumCard(client *whatsmeow.Client, v *events.Message, title, site, i
 	replyMessage(client, v, card)
 }
 
+func handleTikTokReply(client *whatsmeow.Client, v *events.Message, input string, senderID string) {
+	// 1. کیش سے ڈیٹا نکالیں
+	state, exists := ttCache[senderID]
+	if !exists { return }
+
+	// 2. ان پٹ چیک کریں
+	switch input {
+	case "1":
+		// ویڈیو بھیجیں
+		delete(ttCache, senderID)
+		react(client, v.Info.Chat, v.Info.ID, "🎬")
+		fmt.Printf("🎬 [TikTok] Sending video to %s\n", senderID)
+		sendVideo(client, v, state.PlayURL, "🎬 *TikTok Video*")
+		
+	case "2":
+		// آڈیو بھیجیں
+		delete(ttCache, senderID)
+		react(client, v.Info.Chat, v.Info.ID, "🎵")
+		fmt.Printf("🎵 [TikTok] Sending audio to %s\n", senderID)
+		sendDocument(client, v, state.MusicURL, "tiktok_audio.mp3", "audio/mpeg")
+		
+	case "3":
+		// معلومات دکھائیں
+		delete(ttCache, senderID)
+		infoMsg := fmt.Sprintf(`╔═══════════════════╗
+║ 📄 TIKTOK INFO      
+╠═══════════════════╣
+║ 📝 Title: %s
+║ 📊 Size: %.2f MB
+║ ✨ Status: Success
+╚═══════════════════╝`, state.Title, float64(state.Size)/(1024*1024))
+		replyMessage(client, v, infoMsg)
+		
+	default:
+		// اگر 1, 2, 3 کے علاوہ کچھ لکھا تو خاموش رہے یا لاگ کرے
+		fmt.Printf("⚠️ [TikTok] Invalid input from %s: %s\n", senderID, input)
+	}
+}
+
 // 🚀 ہیوی ڈیوٹی میڈیا انجن (The Scientific Power)
 func downloadAndSend(client *whatsmeow.Client, v *events.Message, urlStr string, mode string) {
 	react(client, v.Info.Chat, v.Info.ID, "⏳")
