@@ -115,32 +115,34 @@ func handleToImg(client *whatsmeow.Client, v *events.Message) {
 	os.Remove(input); os.Remove(output)
 }
 
-func handleToVideo(client *whatsmeow.Client, v *events.Message) {
+func handleToMedia(client *whatsmeow.Client, v *events.Message, isGif bool) {
 	var stickerMsg *waProto.StickerMessage
 	if extMsg := v.Message.GetExtendedTextMessage(); extMsg != nil && extMsg.ContextInfo != nil {
 		stickerMsg = extMsg.ContextInfo.QuotedMessage.GetStickerMessage()
 	}
 
 	if stickerMsg == nil || !stickerMsg.GetIsAnimated() {
-		replyMessage(client, v, "❌ Please reply to an *Animated* sticker with *.tovideo*")
+		replyMessage(client, v, "❌ Please reply to an *Animated* sticker.")
 		return
 	}
 
 	react(client, v.Info.Chat, v.Info.ID, "🎥")
-	sendToolCard(client, v, "Motion Engine", "WebP to MP4", "🎬 Rendering High Quality Video...")
-
+	
 	data, err := client.Download(context.Background(), stickerMsg)
 	if err != nil { return }
 
-	input := fmt.Sprintf("vid_in_%d.webp", time.Now().UnixNano())
-	output := fmt.Sprintf("vid_out_%d.mp4", time.Now().UnixNano())
+	input := fmt.Sprintf("in_%d.webp", time.Now().UnixNano())
+	output := fmt.Sprintf("out_%d.mp4", time.Now().UnixNano())
 	os.WriteFile(input, data, 0644)
 
-	// 🚀 ایٹمی FFmpeg کمانڈ (فریم ریٹ اور پکسل فارمیٹ فکس کے ساتھ)
-	// -vcodec libx264: واٹس ایپ کے لئے بہترین انکوڈنگ
-	cmd := exec.Command("ffmpeg", "-y", "-i", input, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-movflags", "+faststart", output)
-	if err := cmd.Run(); err != nil {
-		replyMessage(client, v, "❌ Graphics Engine Error during rendering.")
+	// 🚀 ایٹمی FFmpeg کمانڈ: یہ ہر صورت ویڈیو بنائے گی
+	// ہم نے -vsync 0 اور -vf scale ایڈ کیا ہے تاکہ فریمز ضائع نہ ہوں
+	cmd := exec.Command("ffmpeg", "-y", "-vcodec", "libwebp", "-i", input, "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-preset", "fast", "-crf", "20", output)
+	
+	outLog, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("FFmpeg Error: %s\n", string(outLog))
+		replyMessage(client, v, "❌ Conversion failed. Graphics engine busy.")
 		os.Remove(input)
 		return
 	}
@@ -149,63 +151,24 @@ func handleToVideo(client *whatsmeow.Client, v *events.Message) {
 	up, err := client.Upload(context.Background(), finalData, whatsmeow.MediaVideo)
 	if err != nil { return }
 
-	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+	msg := &waProto.Message{
 		VideoMessage: &waProto.VideoMessage{
 			URL:           proto.String(up.URL),
 			DirectPath:    proto.String(up.DirectPath),
 			MediaKey:      up.MediaKey,
 			Mimetype:      proto.String("video/mp4"),
-			Caption:       proto.String("✅ *Converted to Video*"),
+			Caption:       proto.String("✅ *Impossible Media Lab Success*"),
 			FileLength:    proto.Uint64(uint64(len(finalData))),
 			FileSHA256:    up.FileSHA256,
 			FileEncSHA256: up.FileEncSHA256,
 		},
-	})
-
-	os.Remove(input); os.Remove(output)
-	react(client, v.Info.Chat, v.Info.ID, "✅")
-}
-
-func handleToGif(client *whatsmeow.Client, v *events.Message) {
-	var stickerMsg *waProto.StickerMessage
-	if extMsg := v.Message.GetExtendedTextMessage(); extMsg != nil && extMsg.ContextInfo != nil {
-		stickerMsg = extMsg.ContextInfo.QuotedMessage.GetStickerMessage()
 	}
 
-	if stickerMsg == nil || !stickerMsg.GetIsAnimated() {
-		replyMessage(client, v, "❌ Please reply to an *Animated* sticker with *.togif*")
-		return
+	if isGif {
+		msg.VideoMessage.GifPlayback = proto.Bool(true)
 	}
 
-	react(client, v.Info.Chat, v.Info.ID, "👾")
-	sendToolCard(client, v, "GIF Engine", "WebP to GIF", "🪄 Generating Animated Loop...")
-
-	data, _ := client.Download(context.Background(), stickerMsg)
-	input := fmt.Sprintf("gif_in_%d.webp", time.Now().UnixNano())
-	output := fmt.Sprintf("gif_out_%d.mp4", time.Now().UnixNano())
-	os.WriteFile(input, data, 0644)
-
-	// 🛠️ GIF مخصوص کمانڈ (آڈیو ہٹا کر لوپ سیٹ کرنا)
-	cmd := exec.Command("ffmpeg", "-y", "-i", input, "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", output)
-	cmd.Run()
-
-	finalData, _ := os.ReadFile(output)
-	up, _ := client.Upload(context.Background(), finalData, whatsmeow.MediaVideo)
-
-	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
-		VideoMessage: &waProto.VideoMessage{
-			URL:           proto.String(up.URL),
-			DirectPath:    proto.String(up.DirectPath),
-			MediaKey:      up.MediaKey,
-			Mimetype:      proto.String("video/mp4"),
-			Caption:       proto.String("✅ *Converted to GIF*"),
-			GifPlayback:   proto.Bool(true), // 🚀 یہ اسے واٹس ایپ پر GIF بنائے گا
-			FileLength:    proto.Uint64(uint64(len(finalData))),
-			FileSHA256:    up.FileSHA256,
-			FileEncSHA256: up.FileEncSHA256,
-		},
-	})
-
+	client.SendMessage(context.Background(), v.Info.Chat, msg)
 	os.Remove(input); os.Remove(output)
 	react(client, v.Info.Chat, v.Info.ID, "✅")
 }

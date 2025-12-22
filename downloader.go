@@ -314,59 +314,46 @@ func handleIfunny(client *whatsmeow.Client, v *events.Message, url string) {
 func handleGithub(client *whatsmeow.Client, v *events.Message, urlStr string) {
 	if urlStr == "" { return }
 	
-	// یو آر ایل کلین کریں (اگر اینڈ پر سلیش ہو تو ہٹا دیں)
+	// ✅ فکس: اگر لنک کے آخر میں .git ہو تو اسے صاف کریں
+	urlStr = strings.TrimSuffix(urlStr, ".git")
 	urlStr = strings.TrimSuffix(urlStr, "/")
 	
 	react(client, v.Info.Chat, v.Info.ID, "💻")
 	sendPremiumCard(client, v, "Repo Source", "GitHub", "📁 Packing Repository ZIP...")
 
-	// 🚀 ایٹمی لنک: یہ خود بخود صحیح برانچ تلاش کر لے گا
 	zipURL := urlStr + "/zipball/HEAD"
 
-	// 1️⃣ فائل ڈاؤن لوڈ کریں (بلاک ہونے سے بچنے کے لئے کسٹم کلائنٹ)
-	req, _ := http.NewRequest("GET", zipURL, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	resp, err := http.DefaultClient.Do(req)
-	
+	// ڈاؤن لوڈ لاجک
+	resp, err := http.Get(zipURL)
 	if err != nil || resp.StatusCode != 200 {
-		replyMessage(client, v, "❌ *GitHub Error:* Repository not found or private.")
+		replyMessage(client, v, "❌ *GitHub Error:* Repo not found. Ensure it is public.")
 		return
 	}
 	defer resp.Body.Close()
 
-	// 2️⃣ عارضی زپ فائل بنائیں
 	fileName := fmt.Sprintf("repo_%d.zip", time.Now().UnixNano())
 	out, _ := os.Create(fileName)
 	io.Copy(out, resp.Body)
 	out.Close()
 
-	// 3️⃣ فائل کو بائٹس میں پڑھیں
-	fileData, err := os.ReadFile(fileName)
-	if err != nil { return }
-	defer os.Remove(fileName) // صفائی
+	fileData, _ := os.ReadFile(fileName)
+	defer os.Remove(fileName)
 
-	// 4️⃣ واٹس ایپ پر اپلوڈ کریں
 	up, err := client.Upload(context.Background(), fileData, whatsmeow.MediaDocument)
-	if err != nil {
-		replyMessage(client, v, "❌ WhatsApp document upload failed.")
-		return
-	}
+	if err != nil { return }
 
-	// 5️⃣ فائنل ڈاکومنٹ میسج
 	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		DocumentMessage: &waProto.DocumentMessage{
 			URL:           proto.String(up.URL),
 			DirectPath:    proto.String(up.DirectPath),
 			MediaKey:      up.MediaKey,
 			Mimetype:      proto.String("application/zip"),
-			Title:         proto.String("Source_Code.zip"),
 			FileName:      proto.String("Impossible_Repo.zip"),
+			FileLength:    proto.Uint64(uint64(len(fileData))),
 			FileSHA256:    up.FileSHA256,
 			FileEncSHA256: up.FileEncSHA256,
-			FileLength:    proto.Uint64(uint64(len(fileData))),
 		},
 	})
-	
 	react(client, v.Info.Chat, v.Info.ID, "✅")
 }
 

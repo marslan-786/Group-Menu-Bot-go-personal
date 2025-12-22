@@ -236,9 +236,9 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	case "toimg": 
 	    handleToImg(client, v)
     case "tovideo":
-        handleToVideo(client, v)
+        handleToMedia(client, v)
     case "togif":
-        handleToGif(client, v)
+        handleToMedia(client, v)
     case "s", "sticker": 
         handleToSticker(client, v)
 	case "tourl":
