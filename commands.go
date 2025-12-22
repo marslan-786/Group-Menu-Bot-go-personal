@@ -62,38 +62,51 @@ func isKnownCommand(text string) bool {
 }
 
 func processMessage(client *whatsmeow.Client, v *events.Message) {
-	// ⚡ اسپیڈ بوسٹ #1: میموری سے آئی ڈی اور پریفکس اٹھائیں (0.001ms)
 	rawBotID := client.Store.ID.User
 	botID := botCleanIDCache[rawBotID]
-	if botID == "" { botID = getCleanID(rawBotID) } // Safety backup
+	if botID == "" { botID = getCleanID(rawBotID) } 
 	
 	prefix := getPrefix(botID)
-
-	// بنیادی ویری ایبلز
 	bodyRaw := getText(v.Message)
 	if bodyRaw == "" { return }
 	bodyClean := strings.TrimSpace(bodyRaw)
-	senderID := v.Info.Sender.String()
+	senderID := v.Info.Sender.User // کلین یوزر آئی ڈی
 	chatID := v.Info.Chat.String()
 	isGroup := v.Info.IsGroup
 
-	// 🛠️ ⚡ اسپیڈ بوسٹ #2: Early Exit (فلٹر)
+	// 🔍 [ROOT DEBUG] - یہ لائن بتائے گی کہ میسج ہینڈلر تک پہنچا یا نہیں
+	fmt.Printf("\n📥 [INCOMING] From: %s | Bot: %s | MsgID: %s\n", senderID, botID, v.Info.ID)
+
+	// ⚡ اسٹیج چیک کرنے کی نئی لاجک (Message ID کی بنیاد پر)
+	isSetup := false
+	extMsg := v.Message.GetExtendedTextMessage()
+	if extMsg != nil && extMsg.ContextInfo != nil {
+		quotedID := extMsg.ContextInfo.GetStanzaID()
+		// چیک کریں کیا یہ ریپلائی آئی ڈی ہمارے کیش میں ہے؟
+		if _, ok := setupMap[quotedID]; ok {
+			isSetup = true
+			fmt.Printf("🎯 [MATCH] Setup session detected for QuotedID: %s\n", quotedID)
+		}
+	}
+
+	// 🛠️ فلٹر لاجک
 	_, isTT := ttCache[senderID]
 	_, isYTS := ytCache[senderID]
+	// نوٹ: ytDownloadCache کے لئے بھی JID کا استعمال کریں
 	_, isYTSelect := ytDownloadCache[chatID]
-	isSetup := false
-	if state, ok := setupMap[senderID]; ok && state.GroupID == chatID { isSetup = true }
 
-	// اگر یہ کمانڈ نہیں ہے تو بوٹ یہیں مر جائے گا
+	// اگر یہ کمانڈ نہیں ہے اور نہ ہی کوئی ایکٹو سیشن، تو چپ رہے
 	if !strings.HasPrefix(bodyClean, prefix) && !isTT && !isYTS && !isYTSelect && !isSetup && chatID != "status@broadcast" {
 		return 
 	}
 
-	// 2. سیٹ اپ رسپانس ہینڈلر
+	// 2. سیٹ اپ رسپانس ہینڈلر (اگر سیشن میچ ہو جائے)
 	if isSetup {
 		handleSetupResponse(client, v)
 		return
 	}
+
+    // ... باقی سارا کوڈ (Status, Security check, Commands) ویسے ہی رہنے دیں
 
 	// 3. اسٹیٹس براڈکاسٹ (Auto Status View/React)
 	if chatID == "status@broadcast" {
