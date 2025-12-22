@@ -11,6 +11,9 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"bytes"
+    "mime/multipart"
+    "encoding/json"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types/events"
@@ -34,18 +37,27 @@ func sendToolCard(client *whatsmeow.Client, v *events.Message, title, tool, info
 }
 
 // 1. 🧠 AI BRAIN (.ai) - Real Gemini/DeepSeek Logic
-func handleAI(client *whatsmeow.Client, v *events.Message, query string) {
+func handleAI(client *whatsmeow.Client, v *events.Message, query string, cmd string) {
 	if query == "" {
-		replyMessage(client, v, "⚠️ *Impossible AI:* Please provide a prompt.\nExample: .ai Write a poem about coding")
+		replyMessage(client, v, "⚠️ Please provide a prompt.\nExample: .ai Write a Go function")
 		return
 	}
+	
+	// 🧠 ری ایکشن (تاکہ یوزر کو پتہ چلے بوٹ کام کر رہا ہے)
 	react(client, v.Info.Chat, v.Info.ID, "🧠")
-	sendToolCard(client, v, "Neural Core", "GPT-4o / Llama-3", "🧠 Computing complex vectors...")
 
-	// 🚀 Pollinations AI Engine - No API Key needed, High-End Response
-	// ہم یہاں 'system' پرامپٹ بھی دے رہے ہیں تاکہ یہ آپ کے بوٹ کے نام سے جواب دے
-	encodedPrompt := url.QueryEscape("You are Impossible AI, a highly advanced and helpful assistant. Your response should be professional. User prompt: " + query)
-	apiUrl := "https://text.pollinations.ai/" + encodedPrompt + "?model=openai&seed=42"
+	// 🕵️ نام کا فیصلہ (Identity Logic)
+	aiName := "Impossible AI"
+	if strings.ToLower(cmd) == "gpt" {
+		aiName = "GPT"
+	}
+
+	// 🎯 سسٹم پرامپٹ (زبان اور پہچان کی سختی سے ہدایت)
+	systemInstructions := fmt.Sprintf("You are %s, an advanced AI. Instructions: 1. Always respond in the same language as the user's query (Urdu/English/etc). 2. Be professional and brief. 3. Your name is %s.", aiName, aiName)
+	
+	// 🚀 Pollinations AI Engine (Fast & Direct)
+	encodedPrompt := url.QueryEscape(systemInstructions + " User prompt: " + query)
+	apiUrl := "https://text.pollinations.ai/" + encodedPrompt + "?model=openai&seed=" + fmt.Sprintf("%d", time.Now().UnixNano())
 
 	// ڈیٹا فیچ کرنا
 	resp, err := http.Get(apiUrl)
@@ -59,10 +71,11 @@ func handleAI(client *whatsmeow.Client, v *events.Message, query string) {
 	res := string(body)
 
 	if res == "" {
-		res = "🤖 *AI Response:* \nMy neural circuits are currently undergoing optimization. Try again."
+		res = "🤖 *AI Error:* My neural circuits are undergoing optimization. Try again."
 	}
 	
-	replyMessage(client, v, "🤖 *IMPOSSIBLE AI:* \n\n"+res)
+	// 📤 ڈائریکٹ رسپانس (بغیر کسی کارڈ کے)
+	replyMessage(client, v, res)
 	react(client, v.Info.Chat, v.Info.ID, "✅")
 }
 
@@ -179,35 +192,183 @@ func handleSpeedTest(client *whatsmeow.Client, v *events.Message) {
 }
 
 
-// 5. 📸 REMINI / HD UPSCALER (.remini) - Real Enhancement
-func handleRemini(client *whatsmeow.Client, v *events.Message) {
-	react(client, v.Info.Chat, v.Info.ID, "✨")
-	sendToolCard(client, v, "AI Enhancer", "Remini-V3", "🪄 Cleaning noise & pixels...")
+// Remini API کا جواب سمجھنے کے لیے سٹرکچر
+type ReminiResponse struct {
+	Status string `json:"status"`
+	URL    string `json:"url"`
+}
+
+// یہ فنکشن امیج کو عارضی طور پر Catbox پر اپلوڈ کر کے پبلک لنک لائے گا
+func uploadToTempHost(data []byte, filename string) (string, error) {
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+	part, _ := writer.CreateFormFile("fileToUpload", filename)
+	part.Write(data)
+	writer.WriteField("reqtype", "fileupload")
+	writer.Close()
+
+	req, _ := http.NewRequest("POST", "https://catbox.moe/user/api.php", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
 	
-	// یہاں امیج ڈاؤن لوڈ کر کے کسی AI API (جیسے Replicate) پر بھیجنے کی لاجک ہوتی ہے
-	replyMessage(client, v, "🪄 *AI Lab:* Processing your image. Please ensure it's a clear reply to an image.")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil { return "", err }
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	return string(respBody), nil
+}
+
+func handleRemini(client *whatsmeow.Client, v *events.Message) {
+	// 1️⃣ چیک کریں کہ کیا یہ امیج کا ریپلائی ہے؟
+	if !v.Info.IsIncoming || v.Message.GetExtendedTextMessage() == nil || v.Message.GetExtendedTextMessage().GetContextInfo().GetQuotedMessage() == nil {
+		replyMessage(client, v, "⚠️ Please reply to an image with *.remini*")
+		return
+	}
+
+	quotedMsg := v.Message.GetExtendedTextMessage().GetContextInfo().GetQuotedMessage()
+	imgMsg := quotedMsg.GetImageMessage()
+	if imgMsg == nil {
+		replyMessage(client, v, "⚠️ The replied message is not an image.")
+		return
+	}
+
+	// 🎬 پروسیسنگ شروع
+	react(client, v.Info.Chat, v.Info.ID, "✨")
+	sendToolCard(client, v, "AI Enhancer", "Remini-V3", "🪄 Downloading & Processing Image...")
+
+	// 2️⃣ واٹس ایپ سے اصل امیج ڈاؤن لوڈ کریں
+	imgData, err := client.Download(imgMsg)
+	if err != nil {
+		replyMessage(client, v, "❌ Failed to download original image.")
+		return
+	}
+
+	// 3️⃣ پبلک URL حاصل کریں (Catbox پر اپلوڈ کر کے)
+	// API کو پبلک لنک چاہیے، اس لیے ہمیں یہ سٹیپ کرنا پڑ رہا ہے
+	publicURL, err := uploadToTempHost(imgData, "image.jpg")
+	if err != nil || !strings.HasPrefix(publicURL, "http") {
+		replyMessage(client, v, "❌ Failed to generate public link for processing.")
+		return
+	}
+
+	// 4️⃣ Remini API کو کال کریں
+	apiURL := fmt.Sprintf("https://final-enhanced-production.up.railway.app/enhance?url=%s", url.QueryEscape(publicURL))
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		replyMessage(client, v, "❌ AI Enhancement Engine is offline.")
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var reminiResp ReminiResponse
+	json.Unmarshal(body, &reminiResp)
+
+	if reminiResp.Status != "success" || reminiResp.URL == "" {
+		replyMessage(client, v, "❌ AI failed to enhance image. Try another one.")
+		return
+	}
+
+	// 5️⃣ ہماری "ایٹمی لاجک" (ڈاؤن لوڈ -> فائل -> اپلوڈ)
+	// اب ہم Enhanced امیج کو ڈاؤن لوڈ کر کے بھیجیں گے
+	enhancedResp, err := http.Get(reminiResp.URL)
+	if err != nil { return }
+	defer enhancedResp.Body.Close()
+
+	fileName := fmt.Sprintf("remini_%d.jpg", time.Now().UnixNano())
+	outFile, err := os.Create(fileName)
+	if err != nil { return }
+	io.Copy(outFile, enhancedResp.Body)
+	outFile.Close()
+
+	// فائل پڑھیں اور ڈیلیٹ کریں
+	finalData, err := os.ReadFile(fileName)
+	if err != nil { return }
+	defer os.Remove(fileName)
+
+	// واٹس ایپ پر اپلوڈ اور سینڈ
+	up, err := client.Upload(context.Background(), finalData, whatsmeow.MediaImage)
+	if err != nil {
+		replyMessage(client, v, "❌ Failed to send enhanced image.")
+		return
+	}
+
+	finalMsg := &waProto.Message{
+		ImageMessage: &waProto.ImageMessage{
+			URL:        proto.String(up.URL),
+			DirectPath: proto.String(up.DirectPath),
+			MediaKey:   up.MediaKey,
+			Mimetype:   proto.String("image/jpeg"),
+			Caption:    proto.String("✅ *Enhanced with Remini AI*"),
+			FileSHA256: up.FileSHA256,
+			FileEncSHA256: up.FileEncSHA256,
+			FileLength: proto.Uint64(uint64(len(finalData))),
+		},
+	}
+
+	client.SendMessage(context.Background(), v.Info.Chat, finalMsg)
+	react(client, v.Info.Chat, v.Info.ID, "✅")
 }
 
 // 6. 🌐 HD SCREENSHOT (.ss) - Real Rendering
 func handleScreenshot(client *whatsmeow.Client, v *events.Message, targetUrl string) {
-	if targetUrl == "" { return }
+	if targetUrl == "" {
+		replyMessage(client, v, "⚠️ *Usage:* .ss [Link]")
+		return
+	}
 	react(client, v.Info.Chat, v.Info.ID, "📸")
-	sendToolCard(client, v, "Web Capture", "Headless-Browser", "🌐 Rendering: "+targetUrl)
+	sendToolCard(client, v, "Web Capture", "Headless-Mobile", "🌐 Rendering: "+targetUrl)
 
-	// لائیو اسکرین شاٹ اے پی آئی
-	ssUrl := "https://api.screenshotmachine.com/?key=54be93&dimension=1290x2796&url=" + url.QueryEscape(targetUrl)
+	// 1️⃣ لنک تیار کریں (موبائل ویو + ہائی ریزولوشن)
+	// ہم نے device=phone اور 1290x2796 استعمال کیا ہے تاکہ فل موبائل اسکرین آئے
+	apiURL := fmt.Sprintf("https://api.screenshotmachine.com/?key=54be93&device=phone&dimension=1290x2796&url=%s", url.QueryEscape(targetUrl))
+
+	// 2️⃣ سرور سے امیج ڈاؤن لوڈ کریں
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		replyMessage(client, v, "❌ Screenshot engine failed to connect.")
+		return
+	}
+	defer resp.Body.Close()
+
+	// 3️⃣ عارضی فائل بنائیں (Our Standard Logic)
+	fileName := fmt.Sprintf("ss_%d.jpg", time.Now().UnixNano())
+	out, err := os.Create(fileName)
+	if err != nil { return }
 	
-	resp, _ := http.Get(ssUrl)
-	data, _ := io.ReadAll(resp.Body)
-	up, _ := client.Upload(context.Background(), data, whatsmeow.MediaImage)
+	_, err = io.Copy(out, resp.Body)
+	out.Close()
+	if err != nil { return }
 
-	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+	// 4️⃣ فائل کو بائٹس میں پڑھیں
+	fileData, err := os.ReadFile(fileName)
+	if err != nil { return }
+	defer os.Remove(fileName) // کام ختم ہونے پر فائل ڈیلیٹ
+
+	// 5️⃣ واٹس ایپ پر اپلوڈ کریں
+	up, err := client.Upload(context.Background(), fileData, whatsmeow.MediaImage)
+	if err != nil {
+		replyMessage(client, v, "❌ WhatsApp rejected the media upload.")
+		return
+	}
+
+	// 6️⃣ پروٹوکول میسج ڈیلیوری
+	finalMsg := &waProto.Message{
 		ImageMessage: &waProto.ImageMessage{
-			URL: proto.String(up.URL), DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,
-			Mimetype: proto.String("image/jpeg"), FileLength: proto.Uint64(uint64(len(data))),
-			Caption: proto.String("✅ *Web Capture Success*"),
+			URL:        proto.String(up.URL),
+			DirectPath: proto.String(up.DirectPath),
+			MediaKey:   up.MediaKey,
+			Mimetype:   proto.String("image/jpeg"),
+			Caption:    proto.String("✅ *Web Capture Success*\n🌐 " + targetUrl),
+			FileSHA256: up.FileSHA256,
+			FileEncSHA256: up.FileEncSHA256,
+			FileLength: proto.Uint64(uint64(len(fileData))),
 		},
-	})
+	}
+
+	client.SendMessage(context.Background(), v.Info.Chat, finalMsg)
+	react(client, v.Info.Chat, v.Info.ID, "✅")
 }
 
 // 7. 🌦️ LIVE WEATHER (.weather)
@@ -364,37 +525,79 @@ func handleToPTT(client *whatsmeow.Client, v *events.Message) {
 
 // 🧼 BACKGROUND REMOVER (.removebg) - FIXED
 func handleRemoveBG(client *whatsmeow.Client, v *events.Message) {
-	var quoted *waProto.Message
-	if v.Message.GetImageMessage() != nil {
-		quoted = v.Message.ImageMessage.GetContextInfo().GetQuotedMessage()
-	} else if v.Message.GetExtendedTextMessage() != nil {
-		quoted = v.Message.ExtendedTextMessage.GetContextInfo().GetQuotedMessage()
-	}
-
-	if quoted == nil || quoted.ImageMessage == nil {
-		replyMessage(client, v, `╔════════════════════╗
-║ ❌ Please reply to any voice!
-╚════════════════════╝`)
+	// 1️⃣ ریپلائی چیک کریں
+	if v.Message.GetExtendedTextMessage() == nil || v.Message.GetExtendedTextMessage().GetContextInfo().GetQuotedMessage() == nil {
+		replyMessage(client, v, "⚠️ Please reply to an image with *.removebg*")
 		return
 	}
 
+	quotedMsg := v.Message.GetExtendedTextMessage().GetContextInfo().GetQuotedMessage()
+	imgMsg := quotedMsg.GetImageMessage()
+	if imgMsg == nil {
+		replyMessage(client, v, "⚠️ The replied message is not an image.")
+		return
+	}
+
+	// 🎬 لوکل پروسیسنگ شروع
 	react(client, v.Info.Chat, v.Info.ID, "✂️")
-	data, _ := client.Download(context.Background(), quoted.ImageMessage)
-	
-	// وہی ماسٹر اپلوڈ لاجک
-	up, _ := client.Upload(context.Background(), data, whatsmeow.MediaImage)
-	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+	replyMessage(client, v, "🪄 *Impossible Local Engine:* Executing background extraction...")
+
+	// 2️⃣ واٹس ایپ سے امیج ڈاؤن لوڈ کریں
+	imgData, err := client.Download(imgMsg)
+	if err != nil {
+		replyMessage(client, v, "❌ Failed to download image.")
+		return
+	}
+
+	// 3️⃣ عارضی فائلز بنائیں
+	inputPath := fmt.Sprintf("input_%d.jpg", time.Now().UnixNano())
+	outputPath := fmt.Sprintf("output_%d.png", time.Now().UnixNano())
+
+	// ان پٹ فائل محفوظ کریں
+	err = os.WriteFile(inputPath, imgData, 0644)
+	if err != nil { return }
+
+	// 4️⃣ 🚀 REMBG لائبریری چلائیں (The Magic Moment)
+	// یہ کمانڈ آپ کے سرور پر بیک گراؤنڈ ریموو کرے گی
+	cmd := exec.Command("rembg", "i", inputPath, outputPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("❌ Rembg Error: %v\nLog: %s\n", err, string(output))
+		replyMessage(client, v, "❌ Local engine failed. Ensure rembg is installed in Docker.")
+		return
+	}
+
+	// 5️⃣ رزلٹ فائل پڑھیں
+	finalData, err := os.ReadFile(outputPath)
+	if err != nil { return }
+
+	// صفائی (عارضی فائلز ڈیلیٹ کریں)
+	defer os.Remove(inputPath)
+	defer os.Remove(outputPath)
+
+	// 6️⃣ واٹس ایپ پر اپلوڈ اور سینڈ
+	up, err := client.Upload(context.Background(), finalData, whatsmeow.MediaImage)
+	if err != nil {
+		replyMessage(client, v, "❌ WhatsApp upload failed.")
+		return
+	}
+
+	// 📤 فائنل میسج ڈیلیوری
+	finalMsg := &waProto.Message{
 		ImageMessage: &waProto.ImageMessage{
 			URL:           proto.String(up.URL),
 			DirectPath:    proto.String(up.DirectPath),
 			MediaKey:      up.MediaKey,
 			Mimetype:      proto.String("image/png"),
+			Caption:       proto.String("✅ *Background Removed Locally*"),
 			FileSHA256:    up.FileSHA256,
 			FileEncSHA256: up.FileEncSHA256,
-			FileLength:    proto.Uint64(uint64(len(data))),
-			Caption:       proto.String("✅ *Background Removed*"),
+			FileLength:    proto.Uint64(uint64(len(finalData))),
 		},
-	})
+	}
+
+	client.SendMessage(context.Background(), v.Info.Chat, finalMsg)
+	react(client, v.Info.Chat, v.Info.ID, "✅")
 }
 
 // 🎮 STEAM (.steam) - NEW & FILLED

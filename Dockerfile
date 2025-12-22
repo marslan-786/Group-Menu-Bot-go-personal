@@ -63,6 +63,9 @@ RUN apk add --no-cache \
     && chmod a+rx /usr/local/bin/yt-dlp \
     && rm -rf /var/cache/apk/*
 
+# جہاں آپ کی باقی انسٹالیشنز ہیں، وہاں یہ لائن ڈالیں
+RUN pip3 install rembg[cli] --break-system-packages
+
 WORKDIR /app
 
 # Go کا تیار شدہ بوٹ اٹھائیں
