@@ -81,17 +81,15 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		qID = extMsg.ContextInfo.GetStanzaID()
 	}
 
-	// 🔍 3️⃣ سیشن چیک (یہاں 'isTT' کو ڈیفائن کیا ہے تاکہ ایرر ختم ہو)
+	// 🔍 3️⃣ سیشن چیک (ایرر ختم کرنے کے لیے یہاں صحیح طرح ڈیفائن کیا ہے)
 	_, isSetup := setupMap[qID]
 	_, isYTS := ytCache[qID]
 	_, isYTSelect := ytDownloadCache[qID]
 	
-	// ٹک ٹاک چیک (اگر آپ ٹک ٹاک بھی qID پر شفٹ کر چکے ہیں تو یہ کام کرے گا)
-//	_, isTT := ttCache[qID] 
-	// اگر ٹک ٹاک ابھی تک پرانے طریقے (senderID) پر ہے، تو اسے ایسے لکھیں:
-	if !isTT { _, isTT = ttCache[senderID] }
+	// ٹک ٹاک چیک (چونکہ تمہارا ٹک ٹاک ابھی senderID استعمال کر رہا ہے)
+	_, isTT := ttCache[senderID]
 
-	// 🛡️ 4️⃣ سیکیورٹی چیک (لنک ڈیلیشن)
+	// 🛡️ 4️⃣ سیکیورٹی چیک (لنک ڈیلیشن - اسے صرف ایک بار یہاں ہونا چاہیے)
 	if isGroup {
 		go checkSecurity(client, v)
 	}
@@ -103,14 +101,14 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		return 
 	}
 
-	// 🎯 6️⃣ ریپلائی ہینڈلنگ
+	// 🎯 6️⃣ ریپلائی ہینڈلنگ (Security Setup)
 	if isSetup {
 		handleSetupResponse(client, v)
 		return
 	}
 
+	// 🎯 7️⃣ یوٹیوب ریپلائی ہینڈلنگ
 	if qID != "" {
-		// یوٹیوب سرچ کا جواب
 		if session, ok := ytCache[qID]; ok {
 			if session.BotLID == botID {
 				var idx int
@@ -122,7 +120,6 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 				}
 			}
 		}
-		// یوٹیوب ڈاؤنلوڈ آپشن کا جواب
 		if state, ok := ytDownloadCache[qID]; ok {
 			if state.BotLID == botID {
 				delete(ytDownloadCache, qID)
@@ -131,12 +128,8 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			}
 		}
 	}
-	// 8️⃣ باقی کمانڈز (Switch Case)...
-	// باقی کمانڈز...
 
-    // ... باقی سارا کوڈ (Status, Security check, Commands) ویسے ہی رہنے دیں
-
-	// 3. اسٹیٹس براڈکاسٹ (Auto Status View/React)
+	// 📺 8️⃣ اسٹیٹس براڈکاسٹ ہینڈلنگ
 	if chatID == "status@broadcast" {
 		dataMutex.RLock()
 		if data.AutoStatus {
@@ -150,29 +143,18 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		return
 	}
 
-	// 4. آٹو ریڈ اور آٹو ری ایکٹ
+	// 🔘 9️⃣ آٹو ریڈ اور ری ایکٹ
 	dataMutex.RLock()
-	if data.AutoRead {
-		client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
-	}
-	if data.AutoReact {
-		react(client, v.Info.Chat, v.Info.ID, "❤️")
-	}
+	if data.AutoRead { client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender) }
+	if data.AutoReact { react(client, v.Info.Chat, v.Info.ID, "❤️") }
 	dataMutex.RUnlock()
 
-	// 5. گروپ سیکیورٹی چیک
-	if isGroup {
-		go checkSecurity(client, v)
-	}
-
-	// 6. 🛠️ انٹرایکٹو آپشنز (TikTok/YouTube)
-	
-	// ✅ ٹک ٹاک سلیکشن (آپ کا فیورٹ کارڈ اسٹائل)
+	// 📱 🔟 انٹرایکٹو ٹک ٹاک ہینڈلنگ
 	if isTT {
 		state := ttCache[senderID]
 		if bodyClean == "1" {
 			delete(ttCache, senderID); react(client, v.Info.Chat, v.Info.ID, "🎬")
-			sendVideo(client, v, state.PlayURL, "🎬 *TikTok Video*\n\n✅ Quality: High")
+			sendVideo(client, v, state.PlayURL, "🎬 *TikTok Video*")
 			return
 		} else if bodyClean == "2" {
 			delete(ttCache, senderID); react(client, v.Info.Chat, v.Info.ID, "🎵")
@@ -180,18 +162,11 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			return
 		} else if bodyClean == "3" {
 			delete(ttCache, senderID)
-			infoMsg := fmt.Sprintf(`╔═══════════════════╗
-║ 📄 TIKTOK INFO      
-╠═══════════════════╣
-║ 📝 Title: %s
-║ 📊 Size: %.2f MB
-║ ✨ Status: Success
-╚═══════════════════╝`, state.Title, float64(state.Size)/(1024*1024))
+			infoMsg := fmt.Sprintf("╔═══════════════════╗\n║ 📝 Title: %s\n╚═══════════════════╝", state.Title)
 			replyMessage(client, v, infoMsg)
 			return
 		}
 	}
-
 
 
 	// 7. کمانڈ پارسنگ
