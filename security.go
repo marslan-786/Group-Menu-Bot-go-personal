@@ -350,7 +350,7 @@ func takeSecurityAction(client *whatsmeow.Client, v *events.Message, s *GroupSet
 }
 // مثال کے طور پر
 func onResponse(choice string) {
-    state := setupMap[sender]
+    state := setupMap[v.Info.Sender.String()]
     // ریڈیس میں کی بنے گی: sec:[BotLID]:[GroupID]:[secType]
     key := fmt.Sprintf("sec:%s:%s:%s", state.BotLID, state.GroupID, state.Type)
     rdb.Set(ctx, key, choice, 0)
@@ -365,7 +365,7 @@ func startSecuritySetup(client *whatsmeow.Client, v *events.Message, secType str
 
 	// 2️⃣ ایڈمن چیک لاجک (Admin Only Check)
 	isAdmin := false
-	groupInfo, err := client.GetGroupInfo(v.Info.Chat)
+	groupInfo, err := client.GetGroupInfo(context.Background(), v.Info.Chat)
 	if err == nil {
 		for _, participant := range groupInfo.Participants {
 			// اگر بندہ ایڈمن یا سپر ایڈمن ہے
