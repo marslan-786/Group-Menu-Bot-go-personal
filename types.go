@@ -48,6 +48,7 @@ type SetupState struct {
 	GroupID string
 	User    string
 	BotLID  string
+	BotMsgID string
 }
 
 // --- 🌍 GLOBAL VARIABLES ---
