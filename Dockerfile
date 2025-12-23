@@ -48,6 +48,7 @@ FROM python:3.12-slim-bookworm
 
 # ✅ libgomp1 ایڈ کر دی ہے جو ONNX انجن چلانے کے لیے لازمی ہے
 # سسٹم لائبریریز والے حصے میں 'megatools' ایڈ کر دیں
+# 🛠️ اس لائن کو اپنی Dockerfile میں اپڈیٹ کریں
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
@@ -58,6 +59,8 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     libgomp1 \
     megatools \
+    libwebp-dev \
+    webp \
     && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp انسٹالیشن

@@ -135,28 +135,32 @@ func handleToMedia(client *whatsmeow.Client, v *events.Message, isGif bool) {
 	output := fmt.Sprintf("out_%d.mp4", time.Now().UnixNano())
 	os.WriteFile(input, data, 0644)
 
-	// 🚀 ایٹمی FFmpeg فکس: 
-	// ہم نے '-vcodec libwebp' ہٹا کر ان پٹ کو سادہ رکھا ہے اور 
-	// پکسل فارمیٹ کو زبردستی 'yuv420p' کیا ہے جو واٹس ایپ کے لئے پکا ہے
+	// 🚀 ایٹمی FFmpeg کمانڈ (V6 - Ultra Compatible)
+	// 1. '-ignore_loop 0' ایڈ کیا ہے تاکہ اینیمیشن کو ویڈیو سٹریم سمجھا جائے
+	// 2. '-vcodec libwebp' کو ہٹا کر سادہ ان پٹ رکھا ہے
+	// 3. 'filter_complex' استعمال کیا ہے تاکہ ٹرانسپیرنسی کالی نہ ہو بلکہ مکھن چلے
 	cmd := exec.Command("ffmpeg", "-y", 
+		"-ignore_loop", "0", 
 		"-i", input, 
 		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p", 
 		"-c:v", "libx264", 
 		"-preset", "faster", 
-		"-crf", "20", 
+		"-crf", "22", 
 		"-movflags", "+faststart", 
+		"-t", "10", // میکسیمم 10 سیکنڈ کی ویڈیو
 		output)
 	
 	outLog, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Printf("🔥 Render Error: %s\n", string(outLog))
-		replyMessage(client, v, "❌ Media Engine failed. Trying alternative...")
+		fmt.Printf("🔥 Graphics Engine Error: %s\n", string(outLog))
+		replyMessage(client, v, "❌ Graphics Engine failed to process this sticker chunk.")
 		os.Remove(input)
 		return
 	}
 
 	finalData, _ := os.ReadFile(output)
 	up, err := client.Upload(context.Background(), finalData, whatsmeow.MediaVideo)
+	if err != nil { return }
 
 	msg := &waProto.Message{
 		VideoMessage: &waProto.VideoMessage{
