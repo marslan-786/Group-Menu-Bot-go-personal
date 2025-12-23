@@ -135,19 +135,18 @@ func handleToMedia(client *whatsmeow.Client, v *events.Message, isGif bool) {
 	output := fmt.Sprintf("out_%d.mp4", time.Now().UnixNano())
 	os.WriteFile(input, data, 0644)
 
-	// 🚀 ایٹمی FFmpeg کمانڈ (V6 - Ultra Compatible)
-	// 1. '-ignore_loop 0' ایڈ کیا ہے تاکہ اینیمیشن کو ویڈیو سٹریم سمجھا جائے
-	// 2. '-vcodec libwebp' کو ہٹا کر سادہ ان پٹ رکھا ہے
-	// 3. 'filter_complex' استعمال کیا ہے تاکہ ٹرانسپیرنسی کالی نہ ہو بلکہ مکھن چلے
-	cmd := exec.Command("ffmpeg", "-y", 
-		"-ignore_loop", "0", 
-		"-i", input, 
-		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p", 
-		"-c:v", "libx264", 
-		"-preset", "faster", 
-		"-crf", "22", 
-		"-movflags", "+faststart", 
-		"-t", "10", // میکسیمم 10 سیکنڈ کی ویڈیو
+	// 🚀 FIXED: -ignore_loop ہٹایا، -loop 0 اور -vsync 0 شامل کیا
+	cmd := exec.Command("ffmpeg", "-y",
+		"-loop", "0",           // WebP animation کو ایک بار چلائے
+		"-i", input,
+		"-vsync", "0",          // frame drops روکے
+		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p",
+		"-c:v", "libx264",
+		"-preset", "faster",
+		"-crf", "22",
+		"-movflags", "+faststart",
+		"-t", "10",             // 10 سیکنڈ max
+		"-pix_fmt", "yuv420p",  // compatibility کے لیے
 		output)
 	
 	outLog, err := cmd.CombinedOutput()
@@ -160,7 +159,10 @@ func handleToMedia(client *whatsmeow.Client, v *events.Message, isGif bool) {
 
 	finalData, _ := os.ReadFile(output)
 	up, err := client.Upload(context.Background(), finalData, whatsmeow.MediaVideo)
-	if err != nil { return }
+	if err != nil { 
+		os.Remove(input); os.Remove(output)
+		return 
+	}
 
 	msg := &waProto.Message{
 		VideoMessage: &waProto.VideoMessage{
