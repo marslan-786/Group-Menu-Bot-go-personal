@@ -121,6 +121,7 @@ func handleToMedia(client *whatsmeow.Client, v *events.Message, isGif bool) {
 		stickerMsg = extMsg.ContextInfo.QuotedMessage.GetStickerMessage()
 	}
 
+	// چیک کریں کہ کیا اسٹیکر ہے اور کیا وہ حرکت والا ہے
 	if stickerMsg == nil || !stickerMsg.GetIsAnimated() {
 		replyMessage(client, v, "❌ Please reply to an *Animated* sticker.")
 		return
@@ -135,14 +136,23 @@ func handleToMedia(client *whatsmeow.Client, v *events.Message, isGif bool) {
 	output := fmt.Sprintf("out_%d.mp4", time.Now().UnixNano())
 	os.WriteFile(input, data, 0644)
 
-	// 🚀 ایٹمی FFmpeg کمانڈ: یہ ہر صورت ویڈیو بنائے گی
-	// ہم نے -vsync 0 اور -vf scale ایڈ کیا ہے تاکہ فریمز ضائع نہ ہوں
-	cmd := exec.Command("ffmpeg", "-y", "-vcodec", "libwebp", "-i", input, "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-preset", "fast", "-crf", "20", output)
+	// 🚀 ایٹمی FFmpeg کمانڈ (فکسڈ لاجک)
+	// 1. ہم نے '-vcodec libwebp' ہٹا دیا ہے تاکہ FFmpeg خود پہچانے
+	// 2. ہم نے 'pad' فلٹر ایڈ کیا ہے تاکہ اگر اسٹیکر ٹرانسپیرنٹ ہو تو پیچھے کالا رنگ آ جائے
+	// 3. 'yuv420p' فارمیٹ واٹس ایپ کے لئے لازمی ہے
+	cmd := exec.Command("ffmpeg", "-y", 
+		"-i", input, 
+		"-vf", "pad=iw*2:ih*2:(ow-iw)/2:(oh-ih)/2:color=black,scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p", 
+		"-c:v", "libx264", 
+		"-preset", "faster", 
+		"-crf", "22", 
+		"-movflags", "+faststart", 
+		output)
 	
 	outLog, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Printf("FFmpeg Error: %s\n", string(outLog))
-		replyMessage(client, v, "❌ Conversion failed. Graphics engine busy.")
+		fmt.Printf("🔥 FFmpeg Error Log: %s\n", string(outLog))
+		replyMessage(client, v, "❌ Graphics Engine Error. Use a valid animated sticker.")
 		os.Remove(input)
 		return
 	}
@@ -164,12 +174,16 @@ func handleToMedia(client *whatsmeow.Client, v *events.Message, isGif bool) {
 		},
 	}
 
+	// اگر یوزر نے .togif کمانڈ دی ہے
 	if isGif {
 		msg.VideoMessage.GifPlayback = proto.Bool(true)
 	}
 
 	client.SendMessage(context.Background(), v.Info.Chat, msg)
-	os.Remove(input); os.Remove(output)
+	
+	// صفائی (Cleanup)
+	os.Remove(input)
+	os.Remove(output)
 	react(client, v.Info.Chat, v.Info.ID, "✅")
 }
 
