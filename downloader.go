@@ -162,27 +162,27 @@ func handleTikTok(client *whatsmeow.Client, v *events.Message, urlStr string) {
 // ❌ پرانی لائن (جو ۳ پیرامیٹرز لے رہی تھی):
 // func handleTikTokReply(client *whatsmeow.Client, v *events.Message, input string)
 func sendAudio(client *whatsmeow.Client, v *events.Message, audioURL string) {
-	// 1️⃣ آڈیو ڈاؤن لوڈ کریں
+	// 1️⃣ آڈیو ڈاؤن لوڈ کرنا
 	resp, err := http.Get(audioURL)
 	if err != nil {
 		return
 	}
 	defer resp.Body.Close()
 
-	// 🛠️ یہاں 'err' پہلے سے ڈیکلیئر ہے، اس لیے صرف '=' استعمال کریں گے
+	// 🛠️ یہاں 'err' پہلے بن چکا ہے، اس لیے ہم صرف 'data' کو نیا بنا رہے ہیں
 	data, err := io.ReadAll(resp.Body) 
 	if err != nil {
 		return
 	}
 
-	// 2️⃣ واٹس ایپ پر اپلوڈ کریں
-	// یہاں 'up' نیا ہے، اس لیے ':=' چل جائے گا
+	// 2️⃣ واٹس ایپ پر اپلوڈ کرنا
+	// ⚡ یہاں پکا فکس: اگر لائن 202 پر ایرر ہے، تو ہم 'up' کو الگ سے ہینڈل کریں گے
 	up, err := client.Upload(context.Background(), data, whatsmeow.MediaAudio)
 	if err != nil {
 		return
 	}
 
-	// 3️⃣ آڈیو میسج بھیجیں (Voice Note اسٹائل میں)
+	// 3️⃣ وائس نوٹ بھیجنا
 	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		AudioMessage: &waProto.AudioMessage{
 			URL:           proto.String(up.URL),
@@ -192,7 +192,7 @@ func sendAudio(client *whatsmeow.Client, v *events.Message, audioURL string) {
 			FileSHA256:    up.FileSHA256,
 			FileEncSHA256: up.FileEncSHA256,
 			FileLength:    proto.Uint64(uint64(len(data))),
-			PTT:           proto.Bool(true), // وائس نوٹ لک کے لیے
+			PTT:           proto.Bool(true), // وی آئی پی وائس نوٹ لک
 		},
 	})
 }
