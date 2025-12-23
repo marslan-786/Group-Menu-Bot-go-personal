@@ -159,7 +159,37 @@ func handleTikTok(client *whatsmeow.Client, v *events.Message, urlStr string) {
 	}
 }
 
-func handleTikTokReply(client *whatsmeow.Client, v *events.Message, input string) {
+// ❌ پرانی لائن (جو ۳ پیرامیٹرز لے رہی تھی):
+// func handleTikTokReply(client *whatsmeow.Client, v *events.Message, input string)
+func sendAudio(client *whatsmeow.Client, v *events.Message, audioURL string) {
+	// 1️⃣ آڈیو ڈاؤن لوڈ کریں
+	resp, err := http.Get(audioURL)
+	if err != nil { return }
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+
+	// 2️⃣ واٹس ایپ پر اپلوڈ کریں
+	up, err := client.Upload(context.Background(), data, whatsmeow.MediaAudio)
+	if err != nil { return }
+
+	// 3️⃣ آڈیو میسج بھیجیں (Voice Note اسٹائل میں)
+	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+		AudioMessage: &waProto.AudioMessage{
+			URL:           proto.String(up.URL),
+			DirectPath:    proto.String(up.DirectPath),
+			MediaKey:      up.MediaKey,
+			Mimetype:      proto.String("audio/ogg; codecs=opus"),
+			FileSHA256:    up.FileSHA256,
+			FileEncSHA256: up.FileEncSHA256,
+			FileLength:    proto.Uint64(uint64(len(data))),
+			Ptt:           proto.Bool(true), // 👈 یہ اسے وائس نوٹ بنائے گا
+		},
+	})
+}
+// ✅ نئی اور صحیح لائن (جس میں senderID شامل ہے):
+func handleTikTokReply(client *whatsmeow.Client, v *events.Message, input string, senderID string) {
+    // ... باقی کوڈ ویسا ہی رہے گا ...
 	senderID := v.Info.Sender.ToNonAD().String()
 	state, exists := ttCache[senderID]
 	if !exists { return }
