@@ -135,24 +135,27 @@ func handleToMedia(client *whatsmeow.Client, v *events.Message, isGif bool) {
 	output := fmt.Sprintf("out_%d.mp4", time.Now().UnixNano())
 	os.WriteFile(input, data, 0644)
 
-	// 🚀 FIXED: -ignore_loop ہٹایا، -loop 0 اور -vsync 0 شامل کیا
+	// 🚀 FIXED:
+	// 1. '-c:v libwebp' ان پٹ سے پہلے لگایا تاکہ وہ اینیمیشن کو سمجھ سکے۔
+	// 2. '-vsync 0' (deprecated) ہٹا دیا اور 'fps=25' فلٹر میں شامل کیا۔
+	// 3. '-loop 0' ان پٹ سے ہٹا دیا کیونکہ یہ کبھی کبھی ڈیکوڈر کو کنفیوز کرتا ہے۔
+	
 	cmd := exec.Command("ffmpeg", "-y",
-		"-loop", "0",           // WebP animation کو ایک بار چلائے
+		"-c:v", "libwebp",      // Force external decoder for Animation support
 		"-i", input,
-		"-vsync", "0",          // frame drops روکے
-		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p",
+		"-vf", "fps=25,scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p", // FPS fix + Even dimensions
 		"-c:v", "libx264",
 		"-preset", "faster",
-		"-crf", "22",
+		"-crf", "26",           // Optimized quality/size balance
 		"-movflags", "+faststart",
-		"-t", "10",             // 10 سیکنڈ max
-		"-pix_fmt", "yuv420p",  // compatibility کے لیے
+		"-pix_fmt", "yuv420p",
+		"-t", "10",             // Max duration safety
 		output)
 	
 	outLog, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Printf("🔥 Graphics Engine Error: %s\n", string(outLog))
-		replyMessage(client, v, "❌ Graphics Engine failed to process this sticker chunk.")
+		replyMessage(client, v, "❌ Graphics Engine failed. Try a different sticker.")
 		os.Remove(input)
 		return
 	}
@@ -185,6 +188,7 @@ func handleToMedia(client *whatsmeow.Client, v *events.Message, isGif bool) {
 	os.Remove(input); os.Remove(output)
 	react(client, v.Info.Chat, v.Info.ID, "✅")
 }
+
 
 func handleToURL(client *whatsmeow.Client, v *events.Message) {
 	react(client, v.Info.Chat, v.Info.ID, "🔗")

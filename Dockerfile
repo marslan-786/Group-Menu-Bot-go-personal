@@ -3,12 +3,12 @@
 # ═══════════════════════════════════════════════════════════
 FROM golang:1.24-bookworm AS go-builder
 
+# 🛠️ UPDATE: یہاں سے 'ffmpeg' ہٹا دیا ہے (صرف فائنل اسٹیج میں چاہیے)
 RUN apt-get update && apt-get install -y \
     gcc \
     libc6-dev \
     git \
     libsqlite3-dev \
-    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -46,9 +46,7 @@ RUN npm install --production
 # ═══════════════════════════════════════════════════════════
 FROM python:3.12-slim-bookworm
 
-# ✅ libgomp1 ایڈ کر دی ہے جو ONNX انجن چلانے کے لیے لازمی ہے
-# سسٹم لائبریریز والے حصے میں 'megatools' ایڈ کر دیں
-# 🛠️ اس لائن کو اپنی Dockerfile میں اپڈیٹ کریں
+# ✅ UPDATE: libwebpmux3 اور libwebpdemux2 شامل کیے تاکہ Animation فیل نہ ہو
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
@@ -61,13 +59,15 @@ RUN apt-get update && apt-get install -y \
     megatools \
     libwebp-dev \
     webp \
+    libwebpmux3 \
+    libwebpdemux2 \
     && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp انسٹالیشن
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
     && chmod a+rx /usr/local/bin/yt-dlp
 
-# ✅ onnxruntime کو الگ سے انسٹال کیا ہے تاکہ 'Module Not Found' نہ آئے
+# ✅ onnxruntime انسٹالیشن
 RUN pip3 install --no-cache-dir onnxruntime rembg[cli]
 
 WORKDIR /app
