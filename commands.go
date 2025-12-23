@@ -64,7 +64,7 @@ func isKnownCommand(text string) bool {
 
 
 func processMessage(client *whatsmeow.Client, v *events.Message) {
-	// 1️⃣ بنیادی معلومات نکالنا
+	// 1️⃣ بنیادی معلومات نکالنا (JID ہینڈلنگ فکس کے ساتھ)
 	rawBotID := client.Store.ID.User
 	botID := botCleanIDCache[rawBotID]
 	if botID == "" { botID = getCleanID(rawBotID) } 
@@ -72,8 +72,10 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	prefix := getPrefix(botID)
 	bodyRaw := getText(v.Message)
 	if bodyRaw == "" { return }
+	
 	bodyClean := strings.TrimSpace(bodyRaw)
-	senderID := v.Info.Sender.User
+	// ✅ VIP فکس: ToNonAD() استعمال کریں تاکہ کمپیوٹر اور موبائل کی آئی ڈی ایک ہی رہے
+	senderID := v.Info.Sender.ToNonAD().String() 
 	chatID := v.Info.Chat.String()
 	isGroup := v.Info.IsGroup
 
@@ -84,12 +86,15 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	}
 
 	// 🔍 3️⃣ سیشنز اور اسٹیٹ چیک (Reply Logic)
+	// یوٹیوب ریپلائی (اکثر qID پر ہوتا ہے)
 	session, isYTS := ytCache[qID]
-	state, isYTSelect := ytDownloadCache[qID]
+	stateYT, isYTSelect := ytDownloadCache[qID]
 	_, isSetup := setupMap[qID]
-	_, isTT := ttCache[senderID] // ٹک ٹاک ابھی یوزر آئی ڈی پر ہے
+	
+	// ٹک ٹاک ریپلائی (یہ یوزر آئی ڈی پر ہے، اس لیے ہر میسج پر چیک ہوگا)
+	_, isTT := ttCache[senderID]
 
-	// 🛡️ 4️⃣ سیکیورٹی چیک (اینٹی لنک وغیرہ - فلٹر سے اوپر)
+	// 🛡️ 4️⃣ سیکیورٹی چیک (اینٹی لنک وغیرہ)
 	if isGroup {
 		go checkSecurity(client, v)
 	}
@@ -100,39 +105,43 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		return 
 	}
 
-	// 🎯 6️⃣ ریپلائی ہینڈلنگ (YouTube / Security Setup)
+	// 🎯 6️⃣ ترجیحی ریپلائی ہینڈلنگ (Priority Logic)
+
+	// A. سب سے پہلے سیٹ اپ (Security/Config)
 	if isSetup {
 		handleSetupResponse(client, v)
 		return
 	}
 
+	// B. ٹک ٹاک ریپلائی (اگر یوزر کیش میں ہے اور صرف 1, 2, 3 بھیجا ہے)
+	if isTT && !strings.HasPrefix(bodyClean, prefix) {
+		if bodyClean == "1" || bodyClean == "2" || bodyClean == "3" {
+			handleTikTokReply(client, v, bodyClean, senderID)
+			return
+		}
+	}
+
+	// C. یوٹیوب ریپلائی (اگر میسج کسی پرانے میسج کا ریپلائی ہے)
 	if qID != "" {
-		// یوٹیوب سرچ رزلٹ لسٹ پر ریپلائی
+		// یوٹیوب سرچ رزلٹ لسٹ
 		if isYTS && session.BotLID == botID {
 			var idx int
-			fmt.Sscanf(bodyClean, "%d", &idx)
-			if idx >= 1 && idx <= len(session.Results) {
+			n, _ := fmt.Sscanf(bodyClean, "%d", &idx)
+			if n > 0 && idx >= 1 && idx <= len(session.Results) {
 				delete(ytCache, qID)
 				handleYTDownloadMenu(client, v, session.Results[idx-1].Url)
 				return
 			}
 		}
-		// یوٹیوب ویڈیو سلیکٹر (1,2,3,4) پر ریپلائی
-		if isYTSelect && state.BotLID == botID {
+		// یوٹیوب ویڈیو کوالٹی سلیکٹر
+		if isYTSelect && stateYT.BotLID == botID {
 			delete(ytDownloadCache, qID)
-			// ✅ یہاں لنک بالکل صحیح Case میں جائے گا
-			go handleYTDownload(client, v, state.Url, bodyClean, (bodyClean == "4"))
+			go handleYTDownload(client, v, stateYT.Url, bodyClean, (bodyClean == "4"))
 			return
 		}
 	}
 
-	// 📱 7️⃣ ٹک ٹاک ریپلائی ہینڈلنگ (Prefix کے بغیر)
-	if isTT && !strings.HasPrefix(bodyClean, prefix) {
-		handleTikTokReply(client, v, bodyClean, senderID)
-		return
-	}
-
-	// 📺 8️⃣ اسٹیٹس براڈکاسٹ ہینڈلنگ
+	// 📺 7️⃣ اسٹیٹس براڈکاسٹ ہینڈلنگ
 	if chatID == "status@broadcast" {
 		dataMutex.RLock()
 		if data.AutoStatus {
@@ -146,24 +155,19 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		return
 	}
 
-	// 🔘 9️⃣ آٹو ریڈ اور ری ایکٹ
+	// 🔘 8️⃣ آٹو ریڈ اور ری ایکٹ
 	dataMutex.RLock()
 	if data.AutoRead { client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender) }
 	if data.AutoReact { react(client, v.Info.Chat, v.Info.ID, "❤️") }
 	dataMutex.RUnlock()
 
-	// ⚡ 🔟 مین کمانڈ پارسنگ (The "Case-Safe" Engine)
-	
-	// پریفکس ہٹا کر باقی میسج لیں (لیکن اس کا کیس تبدیل نہ کریں)
+	// ⚡ 9️⃣ مین کمانڈ پارسنگ (The Case-Safe Engine)
 	msgWithoutPrefix := strings.TrimPrefix(bodyClean, prefix)
 	words := strings.Fields(msgWithoutPrefix)
-	
 	if len(words) == 0 { return }
-	
-	// صرف کمانڈ کو چھوٹا (Lowercase) کریں تاکہ .MENU کام کرے
+
+	// کمانڈ کو چھوٹا کریں لیکن آرگیومنٹس (لنکس وغیرہ) کو ویسا ہی رہنے دیں
 	cmd := strings.ToLower(words[0]) 
-	
-	// لنک یا آرگیومنٹس کو ویسا ہی رہنے دیں جیسا یوزر نے بھیجا ہے
 	fullArgs := strings.TrimSpace(strings.Join(words[1:], " "))
 
 	if !canExecute(client, v, cmd) { return }
