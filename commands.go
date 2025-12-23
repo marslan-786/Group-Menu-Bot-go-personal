@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 	"sync"
+	"os"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
