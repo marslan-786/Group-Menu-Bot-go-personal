@@ -7,12 +7,9 @@ import (
 	"time"
     "net/http"
 	"github.com/showwin/speedtest-go/speedtest"
-    "go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
-	// ✅ waLog امپورٹ یہاں سے ہٹا دیا گیا ہے کیونکہ یہ اس فائل میں استعمال نہیں ہو رہا تھا
 	"google.golang.org/protobuf/proto"
 )
 
@@ -688,53 +685,52 @@ func sendMenu(client *whatsmeow.Client, v *events.Message) {
 }
 
 func sendPing(client *whatsmeow.Client, v *events.Message) {
-    // 1. Notify user that test is starting (optional, because speedtest takes time)
-    // sendReplyMessage(client, v, "⏳ Testing Network Speed... Please wait.") 
-
 	// --- 1. Real Latency Test (Ping) ---
 	start := time.Now()
-    // Google ko hit kar ke wapis anay ka time note karega
-	_, err := http.Get("https://www.google.com") 
+	_, err := http.Get("https://www.google.com")
 	if err != nil {
 		fmt.Println("Ping Error:", err)
 	}
 	latency := time.Since(start).Milliseconds()
 
-	// --- 2. Real Speed Test (Upload/Download) ---
-	var dlSpeed, ulSpeed float64
+	// --- 2. Real Speed Test (GB Mode) ---
+	var dlSpeedGbps, ulSpeedGbps float64
+	
 	user, _ := speedtest.FetchUserInfo()
 	serverList, _ := speedtest.FetchServerList(user)
 	targets, _ := serverList.FindServer([]int{})
 
 	if len(targets) > 0 {
 		s := targets[0]
-		s.PingTest(nil)
-		s.DownloadTest()
-		s.UploadTest()
-        
-        // Convert to Mbps (Megabits per second)
-		dlSpeed = s.DLSpeed 
-		ulSpeed = s.ULSpeed
+		_ = s.PingTest(nil)
+		_ = s.DownloadTest()
+		_ = s.UploadTest()
+
+		// Convert Mbps to Gbps (Division by 1024)
+		dlSpeedGbps = s.DLSpeed / 1024.0
+		ulSpeedGbps = s.ULSpeed / 1024.0
 	}
 
-	uptimeStr := getFormattedUptime() // Assuming you have this function
+	uptimeStr := getFormattedUptime() 
 
-	// --- 3. Heavy Style Message Formatting ---
+	// --- 3. Heavy Style Message Formatting (GB Version) ---
+    // %.4f ka matlab hai ashariyah (.) ke baad 4 hindsay dikhaye ga (e.g 1.0245 GB)
 	msg := fmt.Sprintf(`╔════════════════════════╗
 ║    ⚡ 𝐒𝐘𝐒𝐓𝐄𝐌 𝐒𝐓𝐀𝐓𝐔𝐒 ⚡
 ╠════════════════════════╣
 ║ 📶 𝐋𝐚𝐭𝐞𝐧𝐜𝐲   : %d ms
-║ ⬇️ 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝  : %.2f Mbps
-║ ⬆️ 𝐔𝐩𝐥𝐨𝐚𝐝    : %.2f Mbps
+║ ⬇️ 𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝  : %.4f GBps
+║ ⬆️ 𝐔𝐩𝐥𝐨𝐚𝐝    : %.4f GBps
 ╠════════════════════════╣
 ║ ⏱️ 𝐔𝐩𝐭𝐢𝐦𝐞    : %s
 ║ 👑 𝐎𝐰𝐧𝐞𝐫     : %s
 ╠════════════════════════╣
 ║   🟢 𝐒𝐞𝐫𝐯𝐞𝐫 𝐢𝐬 𝐎𝐧𝐥𝐢𝐧𝐞
-╚════════════════════════╝`, latency, dlSpeed, ulSpeed, uptimeStr, OWNER_NAME)
+╚════════════════════════╝`, latency, dlSpeedGbps, ulSpeedGbps, uptimeStr, OWNER_NAME)
 
 	sendReplyMessage(client, v, msg)
 }
+
 
 
 func sendID(client *whatsmeow.Client, v *events.Message) {
