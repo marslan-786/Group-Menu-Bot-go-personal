@@ -131,25 +131,49 @@ func handleToMedia(client *whatsmeow.Client, v *events.Message, isGif bool) {
 	data, err := client.Download(context.Background(), stickerMsg)
 	if err != nil { return }
 
-	input := fmt.Sprintf("in_%d.webp", time.Now().UnixNano())
-	output := fmt.Sprintf("out_%d.mp4", time.Now().UnixNano())
-	os.WriteFile(input, data, 0644)
+	// فائلز کے نام
+	inputWebP := fmt.Sprintf("in_%d.webp", time.Now().UnixNano())
+	tempGif := fmt.Sprintf("temp_%d.gif", time.Now().UnixNano())
+	outputMp4 := fmt.Sprintf("out_%d.mp4", time.Now().UnixNano())
 
-	// 🚀 ایٹمی FFmpeg کمانڈ: یہ ہر صورت ویڈیو بنائے گی
-	// ہم نے -vsync 0 اور -vf scale ایڈ کیا ہے تاکہ فریمز ضائع نہ ہوں
-	cmd := exec.Command("ffmpeg", "-y", "-vcodec", "libwebp", "-i", input, "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-preset", "fast", "-crf", "20", output)
-	
-	outLog, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Printf("FFmpeg Error: %s\n", string(outLog))
-		replyMessage(client, v, "❌ Conversion failed. Graphics engine busy.")
-		os.Remove(input)
+	os.WriteFile(inputWebP, data, 0644)
+
+	// 🛠️ STEP 1: ImageMagick کے ذریعے WebP کو GIF میں تبدیل کریں (Animation بچانے کے لیے)
+	// -coalesce لیئرز کو مکس ہونے سے روکتا ہے
+	cmdConvert := exec.Command("convert", inputWebP, "-coalesce", tempGif)
+	if err := cmdConvert.Run(); err != nil {
+		fmt.Printf("🔥 ImageMagick Error: %v\n", err)
+		replyMessage(client, v, "❌ Failed to parse sticker animation.")
+		os.Remove(inputWebP)
 		return
 	}
 
-	finalData, _ := os.ReadFile(output)
+	// 🛠️ STEP 2: اب GIF کو FFmpeg کے ذریعے MP4 بنائیں
+	cmd := exec.Command("ffmpeg", "-y",
+		"-i", tempGif,          // اب ان پٹ GIF ہے
+		"-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p", // Even dimensions
+		"-c:v", "libx264",
+		"-preset", "faster",
+		"-crf", "26",
+		"-movflags", "+faststart",
+		"-pix_fmt", "yuv420p",
+		"-t", "10",
+		outputMp4)
+	
+	outLog, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Printf("🔥 Graphics Engine Error: %s\n", string(outLog))
+		replyMessage(client, v, "❌ Graphics Engine failed.")
+		os.Remove(inputWebP); os.Remove(tempGif)
+		return
+	}
+
+	finalData, _ := os.ReadFile(outputMp4)
 	up, err := client.Upload(context.Background(), finalData, whatsmeow.MediaVideo)
-	if err != nil { return }
+	if err != nil { 
+		os.Remove(inputWebP); os.Remove(tempGif); os.Remove(outputMp4)
+		return 
+	}
 
 	msg := &waProto.Message{
 		VideoMessage: &waProto.VideoMessage{
@@ -157,7 +181,7 @@ func handleToMedia(client *whatsmeow.Client, v *events.Message, isGif bool) {
 			DirectPath:    proto.String(up.DirectPath),
 			MediaKey:      up.MediaKey,
 			Mimetype:      proto.String("video/mp4"),
-			Caption:       proto.String("✅ *Impossible Media Lab Success*"),
+			Caption:       proto.String("✅ *Converted by Impossible Media Lab*"),
 			FileLength:    proto.Uint64(uint64(len(finalData))),
 			FileSHA256:    up.FileSHA256,
 			FileEncSHA256: up.FileEncSHA256,
@@ -169,9 +193,15 @@ func handleToMedia(client *whatsmeow.Client, v *events.Message, isGif bool) {
 	}
 
 	client.SendMessage(context.Background(), v.Info.Chat, msg)
-	os.Remove(input); os.Remove(output)
+	
+	// سب ڈیلیٹ کریں
+	os.Remove(inputWebP)
+	os.Remove(tempGif)
+	os.Remove(outputMp4)
+	
 	react(client, v.Info.Chat, v.Info.ID, "✅")
 }
+
 
 func handleToURL(client *whatsmeow.Client, v *events.Message) {
 	react(client, v.Info.Chat, v.Info.ID, "🔗")
