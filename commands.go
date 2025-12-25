@@ -401,7 +401,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
     			})
     			return
     		}
-    		handleSendBug(client, v, words[1:])
+    		handleSendBugs(client, v, words[1:])
 		
 		case "liststatus":
 			handleListStatus(client, v)
