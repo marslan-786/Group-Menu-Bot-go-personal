@@ -14,26 +14,45 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// سیٹنگز
 const FloodCount = 50
 const TargetEmoji = "❤️" 
 
-// یہ فنکشن اب آپ کو واٹس ایپ پر جواب بھی دے گا
+// --- نیا ہیلپر فنکشن (Text Extractor) ---
+// یہ فنکشن چیک کرتا ہے کہ ٹیکسٹ سادہ ہے یا ایکسٹینڈڈ (لنک والا)
+func GetMessageContent(msg *waProto.Message) string {
+	if msg == nil {
+		return ""
+	}
+	if msg.Conversation != nil {
+		return *msg.Conversation
+	}
+	if msg.ExtendedTextMessage != nil && msg.ExtendedTextMessage.Text != nil {
+		return *msg.ExtendedTextMessage.Text
+	}
+	// اگر امیج کے نیچے کیپشن ہو تو وہ بھی اٹھا لے
+	if msg.ImageMessage != nil && msg.ImageMessage.Caption != nil {
+		return *msg.ImageMessage.Caption
+	}
+	return ""
+}
+
 func StartFloodAttack(client *whatsmeow.Client, v *events.Message) {
-	// جس نے کمانڈ بھیجی، اسی کو جواب دینے کے لیے چیٹ آئی ڈی
 	userChat := v.Info.Chat
 
-	// 1. کمانڈ اور لنک الگ کرنا
-	args := strings.Fields(v.Message.GetConversation())
+	// 1. اب ہم اپنے نئے فنکشن سے ٹیکسٹ نکالیں گے
+	fullText := GetMessageContent(v.Message)
+	args := strings.Fields(fullText)
+
+	// ڈیبگنگ کے لیے کنسول میں پرنٹ کروا لیں کہ بوٹ کو کیا ملا
+	fmt.Println("Received Text:", fullText)
+
 	if len(args) < 2 {
 		replyToUser(client, userChat, "❌ یار لنک تو دو! \nUsage: >testreact <link>")
 		return
 	}
 
 	link := args[1]
-	
-	// اسٹیٹس اپڈیٹ 1: لنک چیکنگ
-	replyToUser(client, userChat, "🔍 لنک چیک کر رہا ہوں...")
+	replyToUser(client, userChat, "🔍 لنک مل گیا، چیک کر رہا ہوں...")
 
 	parts := strings.Split(link, "/")
 	if len(parts) < 2 {
@@ -41,42 +60,36 @@ func StartFloodAttack(client *whatsmeow.Client, v *events.Message) {
 		return
 	}
 
-	msgID := parts[len(parts)-1]
+	// احتیاط: کبھی کبھی لنک کے آخر میں ?context=... ہوتا ہے، اسے صاف کرنا پڑتا ہے
+	lastPart := parts[len(parts)-1]
+	cleanMsgID := strings.Split(lastPart, "?")[0] 
+	
 	inviteCode := parts[len(parts)-2]
 
-	fmt.Printf("Resolving Channel: Code=%s, MsgID=%s\n", inviteCode, msgID)
-
-	// 2. چینل کی معلومات (Metadata)
+	// 2. چینل کی معلومات
 	metadata, err := client.GetNewsletterInfoWithInvite(context.Background(), inviteCode)
 	if err != nil {
-		replyToUser(client, userChat, "❌ یہ چینل نہیں مل رہا، شاید لنک پرانا ہے یا غلط ہے۔")
-		fmt.Printf("Failed to resolve: %v\n", err)
+		replyToUser(client, userChat, "❌ چینل نہیں ملا۔")
 		return
 	}
 
 	targetJID := metadata.ID
-	
-	// اسٹیٹس اپڈیٹ 2: چینل مل گیا
-	replyToUser(client, userChat, fmt.Sprintf("✅ ٹارگٹ مل گیا!\nID: %s\nFlood شروع کر رہا ہوں (%d Emojis)...", targetJID, FloodCount))
+	replyToUser(client, userChat, fmt.Sprintf("✅ ٹارگٹ لاکڈ!\nID: %s\nMsgID: %s\nAttack: %d Hits 🚀", targetJID, cleanMsgID, FloodCount))
 
-	// 3. فلڈ شروع کریں
-	performFlood(client, targetJID, msgID)
+	// 3. فلڈ شروع
+	performFlood(client, targetJID, cleanMsgID)
 
-	// اسٹیٹس اپڈیٹ 3: کام ختم
-	replyToUser(client, userChat, "✅ مشن مکمل! رزلٹ چیک کرو۔")
+	replyToUser(client, userChat, "✅ مشن مکمل! 💀")
 }
 
 func performFlood(client *whatsmeow.Client, chatJID types.JID, msgID string) {
 	var wg sync.WaitGroup
-
-	fmt.Printf(">>> Stacking %s on Msg: %s (Count: %d)\n", TargetEmoji, msgID, FloodCount)
+	fmt.Printf(">>> Stacking %s on Msg: %s\n", TargetEmoji, msgID)
 
 	for i := 0; i < FloodCount; i++ {
 		wg.Add(1)
-		
 		go func(idx int) {
 			defer wg.Done()
-
 			reactionMsg := &waProto.Message{
 				ReactionMessage: &waProto.ReactionMessage{
 					Key: &waProto.MessageKey{
@@ -88,20 +101,13 @@ func performFlood(client *whatsmeow.Client, chatJID types.JID, msgID string) {
 					SenderTimestampMS: proto.Int64(time.Now().UnixMilli()), 
 				},
 			}
-
-			// یہاں ہم ایرر پرنٹ نہیں کر رہے تاکہ سپیڈ تیز رہے
 			client.SendMessage(context.Background(), chatJID, reactionMsg)
 		}(i)
 	}
-
 	wg.Wait()
-	fmt.Println(">>> Flood execution finished.")
 }
 
-// یہ چھوٹا فنکشن آپ کو میسج بھیجنے کے لیے استعمال ہوگا
 func replyToUser(client *whatsmeow.Client, chatJID types.JID, text string) {
-	msg := &waProto.Message{
-		Conversation: proto.String(text),
-	}
+	msg := &waProto.Message{Conversation: proto.String(text)}
 	client.SendMessage(context.Background(), chatJID, msg)
 }
