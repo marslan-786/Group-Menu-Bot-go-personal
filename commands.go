@@ -14,6 +14,22 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// =========================================================
+// 🛑 ANTI-SPAM CONFIGURATION (RESTRICTED ZONES)
+// =========================================================
+
+// 1. جن گروپس میں آپ چاہتے ہیں کہ صرف "خاص بوٹس" بولیں
+var RestrictedGroups = map[string]bool{
+    "120363365896020486@g.us": true, // آپ کا مین گروپ 1
+}
+
+// 2. وہ بوٹ نمبرز جو ان گروپس میں بولنے کی اجازت رکھتے ہیں (صرف آپ کے نمبر)
+var AuthorizedBots = map[string]bool{
+    "923017552805": true, // آپ کا مین بوٹ نمبر
+    "923116573691": true, // کوئی دوسرا بیک اپ بوٹ
+}
+// =========================================================
+
 // ⚡ نوٹ: یہاں سے وہ ڈپلیکیٹ ویری ایبلز (activeClients, clientsMutex وغیرہ) 
 // ہٹا دیئے گئے ہیں کیونکہ وہ اب صرف main.go میں ایک ہی بار ڈیفائن ہوں گے۔
 
@@ -155,8 +171,9 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	// ⚡ EXECUTION ENGINE (Goroutines for Non-Blocking Handling)
 	// =========================================================================
 	
+	// ہم سارا Logic ایک Goroutine میں ڈالیں گے تاکہ اگلا میسج فوراً پک ہو جائے
 	go func() {
-		defer recovery()
+		defer recovery() // Safe execution
 
 		// 📺 A. Status Handling (Priority 1)
 		if isStatus {
@@ -221,6 +238,36 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 
 		cmd := strings.ToLower(words[0])
 		fullArgs := strings.TrimSpace(strings.Join(words[1:], " "))
+
+		// =========================================================
+		// 🛡️ 1. RESTRICTED GROUP FILTER (Anti-Spam)
+		// =========================================================
+		// اگر یہ گروپ "خاص گروپس" کی لسٹ میں ہے، تو صرف "الاؤڈ بوٹ" ہی بولے گا
+		if RestrictedGroups[v.Info.Chat.String()] {
+			if !AuthorizedBots[botID] {
+				return // باقی سب بوٹس کو خاموش کر دو
+			}
+		}
+
+		// =========================================================
+		// 🛡️ 2. MODE CHECK (Admin / Private / Public)
+		// =========================================================
+		if v.Info.IsGroup {
+			s := getGroupSettings(v.Info.Chat.String())
+			
+			// اگر موڈ "Private" ہے -> تو گروپ میں جواب نہ دے (سوائے اونر کے)
+			if s.Mode == "private" && !isOwner(client, v.Info.Sender) {
+				return
+			}
+
+			// اگر موڈ "Admin" ہے -> تو صرف ایڈمنز کو جواب دے (سوائے اونر کے)
+			if s.Mode == "admin" && !isOwner(client, v.Info.Sender) {
+				if !isAdmin(client, v.Info.Chat, v.Info.Sender) {
+					return
+				}
+			}
+		}
+		// =========================================================
 
 		// Check Permission (Memory Cached)
 		if !canExecute(client, v, cmd) { return }
