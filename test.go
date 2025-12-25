@@ -17,69 +17,88 @@ import (
 const FloodCount = 50
 const TargetEmoji = "❤️" 
 
-// --- نیا ہیلپر فنکشن (Text Extractor) ---
-// یہ فنکشن چیک کرتا ہے کہ ٹیکسٹ سادہ ہے یا ایکسٹینڈڈ (لنک والا)
 func GetMessageContent(msg *waProto.Message) string {
-	if msg == nil {
-		return ""
-	}
-	if msg.Conversation != nil {
-		return *msg.Conversation
-	}
-	if msg.ExtendedTextMessage != nil && msg.ExtendedTextMessage.Text != nil {
-		return *msg.ExtendedTextMessage.Text
-	}
-	// اگر امیج کے نیچے کیپشن ہو تو وہ بھی اٹھا لے
-	if msg.ImageMessage != nil && msg.ImageMessage.Caption != nil {
-		return *msg.ImageMessage.Caption
-	}
+	if msg == nil { return "" }
+	if msg.Conversation != nil { return *msg.Conversation }
+	if msg.ExtendedTextMessage != nil && msg.ExtendedTextMessage.Text != nil { return *msg.ExtendedTextMessage.Text }
+	if msg.ImageMessage != nil && msg.ImageMessage.Caption != nil { return *msg.ImageMessage.Caption }
 	return ""
+}
+
+func replyToUser(client *whatsmeow.Client, chatJID types.JID, text string) {
+	msg := &waProto.Message{Conversation: proto.String(text)}
+	client.SendMessage(context.Background(), chatJID, msg)
 }
 
 func StartFloodAttack(client *whatsmeow.Client, v *events.Message) {
 	userChat := v.Info.Chat
-
-	// 1. اب ہم اپنے نئے فنکشن سے ٹیکسٹ نکالیں گے
 	fullText := GetMessageContent(v.Message)
 	args := strings.Fields(fullText)
 
-	// ڈیبگنگ کے لیے کنسول میں پرنٹ کروا لیں کہ بوٹ کو کیا ملا
-	fmt.Println("Received Text:", fullText)
-
 	if len(args) < 2 {
-		replyToUser(client, userChat, "❌ یار لنک تو دو! \nUsage: >testreact <link>")
+		replyToUser(client, userChat, "❌ لنک مہیا کریں۔")
 		return
 	}
 
 	link := args[1]
-	replyToUser(client, userChat, "🔍 لنک مل گیا، چیک کر رہا ہوں...")
-
 	parts := strings.Split(link, "/")
+	// لنک فارمیٹ: https://whatsapp.com/channel/CODE/ID
 	if len(parts) < 2 {
-		replyToUser(client, userChat, "❌ غلط لنک فارمیٹ ہے۔")
+		replyToUser(client, userChat, "❌ غلط لنک۔")
 		return
 	}
 
-	// احتیاط: کبھی کبھی لنک کے آخر میں ?context=... ہوتا ہے، اسے صاف کرنا پڑتا ہے
+	// آئی ڈی اور کوڈ نکالنا
 	lastPart := parts[len(parts)-1]
-	cleanMsgID := strings.Split(lastPart, "?")[0] 
-	
+	msgID := strings.Split(lastPart, "?")[0] // صفائی
 	inviteCode := parts[len(parts)-2]
 
-	// 2. چینل کی معلومات
+	fmt.Printf("Debug: Invite=%s, MsgID=%s\n", inviteCode, msgID)
+	replyToUser(client, userChat, "🔍 چینل ڈیٹا اٹھا رہا ہوں...")
+
+	// 1. چینل کی معلومات (Metadata)
 	metadata, err := client.GetNewsletterInfoWithInvite(context.Background(), inviteCode)
 	if err != nil {
-		replyToUser(client, userChat, "❌ چینل نہیں ملا۔")
+		replyToUser(client, userChat, fmt.Sprintf("❌ چینل نہیں ملا: %v", err))
 		return
 	}
 
 	targetJID := metadata.ID
-	replyToUser(client, userChat, fmt.Sprintf("✅ ٹارگٹ لاکڈ!\nID: %s\nMsgID: %s\nAttack: %d Hits 🚀", targetJID, cleanMsgID, FloodCount))
+	replyToUser(client, userChat, fmt.Sprintf("✅ چینل: %s\nID: %s\n ٹیسٹ شاٹ لے رہا ہوں...", metadata.ThreadMetadata.Name.Text, msgID))
 
-	// 3. فلڈ شروع
-	performFlood(client, targetJID, cleanMsgID)
+	// ---------------------------------------------------------
+	// 2. TEST SHOT (پہلے ایک ری ایکٹ چیک کریں)
+	// ---------------------------------------------------------
+	
+	// چینل میسجز میں FromMe ہمیشہ false ہوتا ہے
+	// RemoteJID چینل کی JID ہوتی ہے
+	testReaction := &waProto.Message{
+		ReactionMessage: &waProto.ReactionMessage{
+			Key: &waProto.MessageKey{
+				RemoteJID: proto.String(targetJID.String()),
+				FromMe:    proto.Bool(false), 
+				ID:        proto.String(msgID),
+			},
+			Text:              proto.String(TargetEmoji),
+			SenderTimestampMS: proto.Int64(time.Now().UnixMilli()), 
+		},
+	}
 
-	replyToUser(client, userChat, "✅ مشن مکمل! 💀")
+	// ہم یہاں ایرر چیک کریں گے
+	resp, err := client.SendMessage(context.Background(), targetJID, testReaction)
+	if err != nil {
+		fmt.Println("Reaction Error:", err)
+		replyToUser(client, userChat, fmt.Sprintf("❌ ری ایکٹ فیل ہوگیا!\nوجہ: %v", err))
+		return
+	}
+
+	fmt.Println("Test Shot Success. Server ID:", resp.ID)
+	replyToUser(client, userChat, "✅ ٹیسٹ کامیاب! اب فلڈ کر رہا ہوں... 🚀")
+
+	// 3. اگر ٹیسٹ پاس ہو گیا، تو فلڈ کریں
+	performFlood(client, targetJID, msgID)
+	
+	replyToUser(client, userChat, "✅ مشن مکمل۔")
 }
 
 func performFlood(client *whatsmeow.Client, chatJID types.JID, msgID string) {
@@ -101,13 +120,12 @@ func performFlood(client *whatsmeow.Client, chatJID types.JID, msgID string) {
 					SenderTimestampMS: proto.Int64(time.Now().UnixMilli()), 
 				},
 			}
-			client.SendMessage(context.Background(), chatJID, reactionMsg)
+			// یہاں اب بھی ایرر پرنٹ کروا لیتے ہیں تاکہ کنسول میں پتہ چلے
+			_, err := client.SendMessage(context.Background(), chatJID, reactionMsg)
+			if err != nil {
+				fmt.Printf("Flood Err %d: %v\n", idx, err)
+			}
 		}(i)
 	}
 	wg.Wait()
-}
-
-func replyToUser(client *whatsmeow.Client, chatJID types.JID, text string) {
-	msg := &waProto.Message{Conversation: proto.String(text)}
-	client.SendMessage(context.Background(), chatJID, msg)
 }
