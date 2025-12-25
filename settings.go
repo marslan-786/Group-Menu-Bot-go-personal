@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"encoding/json"
 	"time"
 
 	"go.mau.fi/whatsmeow"
@@ -11,76 +12,7 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 )
 
-func saveGroupSettings(s *GroupSettings) {
-	// 1. پہلے میموری (RAM) میں اپڈیٹ کریں (فاسٹ ایکسیس کے لیے)
-	cacheMutex.Lock()
-	groupCache[s.ChatID] = s
-	cacheMutex.Unlock()
 
-	// 2. اب Redis میں ہمیشہ کے لیے سیو کریں
-	if rdb != nil {
-		// ڈیٹا کو JSON میں تبدیل کریں
-		jsonData, err := json.Marshal(s)
-		if err == nil {
-			// Redis Key: "group_settings:12036..."
-			key := "group_settings:" + s.ChatID
-			
-			// Redis میں سیو کریں (0 کا مطلب ہے کبھی ایکسپائر نہ ہو)
-			err := rdb.Set(ctx, key, jsonData, 0).Err()
-			if err != nil {
-				fmt.Printf("⚠️ [REDIS ERROR] Failed to save settings for %s: %v\n", s.ChatID, err)
-			} else {
-				// fmt.Println("✅ Settings saved to Redis") // (Optional Log)
-			}
-		}
-	}
-}
-
-
-func getGroupSettings(chatID string) *GroupSettings {
-	// 1. پہلے میموری (RAM) چیک کریں
-	cacheMutex.RLock()
-	s, exists := groupCache[chatID]
-	cacheMutex.RUnlock()
-
-	if exists {
-		return s
-	}
-
-	// 2. اگر میموری میں نہیں ہے، تو Redis چیک کریں
-	if rdb != nil {
-		key := "group_settings:" + chatID
-		val, err := rdb.Get(ctx, key).Result()
-		
-		if err == nil {
-			// Redis سے ڈیٹا مل گیا! اب اسے واپس Struct میں ڈالیں
-			var loadedSettings GroupSettings
-			err := json.Unmarshal([]byte(val), &loadedSettings)
-			if err == nil {
-				// میموری میں بھی رکھ لیں تاکہ اگلی بار Redis کو کال نہ کرنی پڑے
-				cacheMutex.Lock()
-				groupCache[chatID] = &loadedSettings
-				cacheMutex.Unlock()
-				
-				return &loadedSettings
-			}
-		}
-	}
-
-	// 3. اگر Redis میں بھی نہیں ہے، تو ڈیفالٹ سیٹنگز بنا کر دیں
-	// (پہلی بار جب گروپ میں بوٹ آئے گا)
-	newSettings := &GroupSettings{
-		ChatID:         chatID,
-		Mode:           "public", // ڈیفالٹ موڈ
-		Antilink:       false,
-		AntilinkAdmin:  true,     // ڈیفالٹ: ایڈمن لنک بھیج سکے
-		AntilinkAction: "delete", // ڈیفالٹ ایکشن
-		Welcome:        false,
-		Warnings:       make(map[string]int),
-	}
-
-	return newSettings
-}
 
 // ==================== سیٹنگز سسٹم ====================
 func toggleAlwaysOnline(client *whatsmeow.Client, v *events.Message) {

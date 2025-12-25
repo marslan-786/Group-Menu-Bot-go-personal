@@ -931,27 +931,49 @@ func getText(m *waProto.Message) string {
 	return ""
 }
 
-func getGroupSettings(id string) *GroupSettings {
+func getGroupSettings(chatID string) *GroupSettings {
+	// 1. پہلے میموری (RAM) چیک کریں
 	cacheMutex.RLock()
-	if s, ok := groupCache[id]; ok {
-		cacheMutex.RUnlock()
-		return s
-	}
+	s, exists := groupCache[chatID]
 	cacheMutex.RUnlock()
 
-	s := &GroupSettings{
-		ChatID:         id,
-		Mode:           "public",
+	if exists {
+		return s
+	}
+
+	// 2. اگر میموری میں نہیں ہے، تو Redis چیک کریں
+	if rdb != nil {
+		key := "group_settings:" + chatID
+		val, err := rdb.Get(ctx, key).Result()
+		
+		if err == nil {
+			// Redis سے ڈیٹا مل گیا! اب اسے واپس Struct میں ڈالیں
+			var loadedSettings GroupSettings
+			err := json.Unmarshal([]byte(val), &loadedSettings)
+			if err == nil {
+				// میموری میں بھی رکھ لیں تاکہ اگلی بار Redis کو کال نہ کرنی پڑے
+				cacheMutex.Lock()
+				groupCache[chatID] = &loadedSettings
+				cacheMutex.Unlock()
+				
+				return &loadedSettings
+			}
+		}
+	}
+
+	// 3. اگر Redis میں بھی نہیں ہے، تو ڈیفالٹ سیٹنگز بنا کر دیں
+	// (پہلی بار جب گروپ میں بوٹ آئے گا)
+	newSettings := &GroupSettings{
+		ChatID:         chatID,
+		Mode:           "public", // ڈیفالٹ موڈ
 		Antilink:       false,
-		AntilinkAdmin:  true,
-		AntilinkAction: "delete",
+		AntilinkAdmin:  true,     // ڈیفالٹ: ایڈمن لنک بھیج سکے
+		AntilinkAction: "delete", // ڈیفالٹ ایکشن
+		Welcome:        false,
 		Warnings:       make(map[string]int),
 	}
 
-	cacheMutex.Lock()
-	groupCache[id] = s
-	cacheMutex.Unlock()
-	return s
+	return newSettings
 }
 
 func handleSessionDelete(client *whatsmeow.Client, v *events.Message, args []string) {

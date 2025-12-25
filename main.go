@@ -571,9 +571,28 @@ func SetGlobalClient(c *whatsmeow.Client) {
 }
 
 func saveGroupSettings(s *GroupSettings) {
+	// 1. پہلے میموری (RAM) میں اپڈیٹ کریں (فاسٹ ایکسیس کے لیے)
 	cacheMutex.Lock()
 	groupCache[s.ChatID] = s
 	cacheMutex.Unlock()
+
+	// 2. اب Redis میں ہمیشہ کے لیے سیو کریں
+	if rdb != nil {
+		// ڈیٹا کو JSON میں تبدیل کریں
+		jsonData, err := json.Marshal(s)
+		if err == nil {
+			// Redis Key: "group_settings:12036..."
+			key := "group_settings:" + s.ChatID
+			
+			// Redis میں سیو کریں (0 کا مطلب ہے کبھی ایکسپائر نہ ہو)
+			err := rdb.Set(ctx, key, jsonData, 0).Err()
+			if err != nil {
+				fmt.Printf("⚠️ [REDIS ERROR] Failed to save settings for %s: %v\n", s.ChatID, err)
+			} else {
+				// fmt.Println("✅ Settings saved to Redis") // (Optional Log)
+			}
+		}
+	}
 }
 
 func monitorNewSessions(container *sqlstore.Container) {
