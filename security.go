@@ -801,8 +801,14 @@ func scanForVirus(msg string) bool {
 // 3. PROTECTION: Block & Delete Logic
 // ---------------------------------------------------------
 // اس فنکشن کو آپ processMessage کے شروع میں کال کریں گے
+
+// ... (آپ کے badChars اور extractText والے فنکشنز ویسے ہی رہیں گے) ...
+
+// ---------------------------------------------------------
+// 3. PROTECTION: Block & Delete Logic (FIXED)
+// ---------------------------------------------------------
 func AutoProtect(client *whatsmeow.Client, v *events.Message) bool {
-	// اگر سسٹم بند ہے یا گروپ ہے تو اگنور کریں (صرف پرسنل چیٹ کے لیے)
+	// 1. Basic Checks (System OFF or Group Message -> Ignore)
 	if !AntiBugEnabled || v.Info.IsGroup {
 		return false
 	}
@@ -812,25 +818,34 @@ func AutoProtect(client *whatsmeow.Client, v *events.Message) bool {
 		return false
 	}
 
-	// اگر وائرس پکڑا گیا
+	// 2. Scan Logic
 	if scanForVirus(text) {
 		sender := v.Info.Sender
 		chat := v.Info.Chat
 
-		fmt.Printf("🚨 VIRUS DETECTED from %s | ACTION: BLOCK + DELETE\n", sender.User)
+		fmt.Printf("🚨 VIRUS DETECTED from %s | ACTION: BLOCK + CLEAR\n", sender.User)
 
-		// A. پہلے اسے Block کریں (تاکہ مزید میسج نہ آئیں)
-		client.UpdateBlocklist(context.Background(), sender, events.BlockListActionBlock)
+		// ✅ FIX 1: Correct Block Method
+		// events.BlockListActionBlock کی جگہ whatsmeow.BlocklistActionBlock استعمال کریں
+		_, err := client.UpdateBlocklist(sender, whatsmeow.BlocklistActionBlock)
+		if err != nil {
+			fmt.Println("❌ Block Error:", err)
+		}
 
-		// B. پھر پوری چیٹ Delete کر دیں (تاکہ کریش ختم ہو جائے)
-		// "1" کا مطلب ہے میڈیا بھی ڈیلیٹ ہو جائے
-		client.DeleteChat(context.Background(), chat, "1")
+		// ✅ FIX 2: Correct Delete/Clear Method
+		// DeleteChat موجود نہیں ہے، اس لیے ہم "Clear Chat" ایکسٹینشن استعمال کریں گے
+		// یہ چیٹ ہسٹری اڑا دے گا تاکہ کریش ختم ہو جائے
+		_, err = client.SetChatExtension(chat, whatsmeow.ChatExtensionClear)
+		if err != nil {
+			fmt.Println("❌ Clear Chat Error:", err)
+		}
 
-		return true // True کا مطلب ہے کہ وائرس تھا اور ہم نے اسے روک دیا
+		return true
 	}
 
 	return false
 }
+
 
 // ---------------------------------------------------------
 // 4. COMMAND: .send (Testing Tool)
