@@ -22,6 +22,11 @@ import (
 
 // ==================== ٹولز سسٹم ====================
 func handleToSticker(client *whatsmeow.Client, v *events.Message) {
+	// --- 1. 5 Minute Context Timeout Setup ---
+	// یہ سب سے اہم ہے۔ یہ 5 منٹ تک پروسیس کو زندہ رکھے گا۔
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	var quoted *waProto.Message
 	if extMsg := v.Message.GetExtendedTextMessage(); extMsg != nil && extMsg.ContextInfo != nil {
 		quoted = extMsg.ContextInfo.QuotedMessage
@@ -36,12 +41,14 @@ func handleToSticker(client *whatsmeow.Client, v *events.Message) {
 		media = quoted.GetVideoMessage()
 		isAnimated = true
 	} else {
-		replyMessage(client, v, "❌ Reply to a Photo or Video to make a sticker.")
+		replyMessage(client, v, "❌ Reply to a Photo or Video.")
 		return
 	}
 
 	react(client, v.Info.Chat, v.Info.ID, "✨")
-	data, err := client.Download(context.Background(), media)
+
+	// --- Download with Timeout ---
+	data, err := client.Download(ctx, media)
 	if err != nil {
 		fmt.Println("Download Failed:", err)
 		return
@@ -56,57 +63,56 @@ func handleToSticker(client *whatsmeow.Client, v *events.Message) {
 	var cmd *exec.Cmd
 
 	if isAnimated {
-		// --- Long Duration & Low Quality Logic ---
-		// fps=8: ایک سیکنڈ میں صرف 8 تصاویر (اس سے سائز بہت کم ہوگا اور ویڈیو لمبی ہو سکے گی)
-		// -q:v 15: کوالٹی کو 15% پر رکھا ہے (کافی کم ہے، لیکن موبائل پر ٹھیک لگے گی)
-		// -t 60: ویڈیو کو 60 سیکنڈ تک اجازت دے دی ہے۔
-		cmd = exec.Command("ffmpeg", "-y", "-i", input,
+		// --- Optimized for Loading Speed ---
+		// -compression_level 2: (Range 0-6). 6 سب سے زیادہ دباتا ہے، 0 سب سے ہلکا۔
+		// ہم نے 2 رکھا ہے تاکہ فائل جلدی ڈیکوڈ (Play) ہو جائے اور "لوڈنگ" پر نہ اٹکے۔
+		cmd = exec.CommandContext(ctx, "ffmpeg", "-y", "-i", input,
 			"-vcodec", "libwebp",
 			"-filter:v", "fps=8,scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
 			"-loop", "0",
 			"-preset", "default",
 			"-an", "-vsync", "0",
-			"-q:v", "15", // Low Quality for longer duration
+			"-q:v", "15",            // Low Quality to keep size small
 			"-lossless", "0",
-			"-t", "00:01:00", // Max 60 seconds
+			"-compression_level", "2", // Fast decoding logic added
+			"-t", "00:01:00",        // 60 Seconds limit
 			output)
 	} else {
-		// --- Static Image (High Quality) ---
-		// تصویر چونکہ ایک ہی فریم ہے، اس کی کوالٹی اچھی رکھتے ہیں۔
-		cmd = exec.Command("ffmpeg", "-y", "-i", input,
+		cmd = exec.CommandContext(ctx, "ffmpeg", "-y", "-i", input,
 			"-vcodec", "libwebp",
 			"-filter:v", "scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
 			output)
 	}
 
+	// --- Convert with Timeout ---
 	err = cmd.Run()
 	if err != nil {
-		fmt.Println("FFmpeg Error:", err)
-		replyMessage(client, v, "❌ Conversion failed.")
+		fmt.Println("FFmpeg Error (Check timeout):", err)
+		replyMessage(client, v, "❌ Conversion failed or timed out.")
 		os.Remove(input)
 		return
 	}
 
 	finalData, _ := os.ReadFile(output)
 
-	// --- Safety Size Check ---
-	// چونکہ تم نے کہا 2MB تک چل جاتا ہے، تو میں نے سیفٹی لمٹ 2.5MB رکھ دی ہے۔
-	// اگر 60 سیکنڈ کی ویڈیو اس کوالٹی پر بھی 2.5MB سے اوپر گئی تو واٹس ایپ شاید ایرر دے۔
-	if len(finalData) > 2500000 { 
-		replyMessage(client, v, "⚠️ Sticker is too heavy (>2.5MB). Try cutting the video a bit.")
+	// --- Safety Check (2.5MB) ---
+	if len(finalData) > 5000000 {
+		replyMessage(client, v, "⚠️ Sticker too heavy (>2.5MB).")
 		os.Remove(input); os.Remove(output)
 		return
 	}
 
-	up, err := client.Upload(context.Background(), finalData, whatsmeow.MediaImage)
+	// --- Upload with Timeout ---
+	up, err := client.Upload(ctx, finalData, whatsmeow.MediaImage)
 	if err != nil {
 		fmt.Println("Upload Error:", err)
-		replyMessage(client, v, "❌ Upload failed.")
+		replyMessage(client, v, "❌ Upload timed out.")
 		os.Remove(input); os.Remove(output)
 		return
 	}
 
-	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+	// --- Send Message ---
+	client.SendMessage(ctx, v.Info.Chat, &waProto.Message{
 		StickerMessage: &waProto.StickerMessage{
 			URL:           proto.String(up.URL),
 			DirectPath:    proto.String(up.DirectPath),
