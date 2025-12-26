@@ -41,20 +41,70 @@ func handleToSticker(client *whatsmeow.Client, v *events.Message) {
 	}
 
 	react(client, v.Info.Chat, v.Info.ID, "✨")
-	data, _ := client.Download(context.Background(), media)
-	input := "temp_in"
-	output := "temp_out.webp"
+	data, err := client.Download(context.Background(), media)
+	if err != nil {
+		fmt.Println("Download Failed:", err)
+		return
+	}
+
+	uniqueID := v.Info.ID
+	input := fmt.Sprintf("temp_in_%s", uniqueID)
+	output := fmt.Sprintf("temp_out_%s.webp", uniqueID)
+
 	os.WriteFile(input, data, 0644)
 
-	// FFmpeg Sticker Logic (512x512)
+	var cmd *exec.Cmd
+
 	if isAnimated {
-		exec.Command("ffmpeg", "-y", "-i", input, "-vcodec", "libwebp", "-filter:v", "fps=fps=15,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white@0", "-lossless", "1", "-loop", "0", "-preset", "default", "-an", "-vsync", "0", output).Run()
+		// --- Long Duration & Low Quality Logic ---
+		// fps=8: ایک سیکنڈ میں صرف 8 تصاویر (اس سے سائز بہت کم ہوگا اور ویڈیو لمبی ہو سکے گی)
+		// -q:v 15: کوالٹی کو 15% پر رکھا ہے (کافی کم ہے، لیکن موبائل پر ٹھیک لگے گی)
+		// -t 60: ویڈیو کو 60 سیکنڈ تک اجازت دے دی ہے۔
+		cmd = exec.Command("ffmpeg", "-y", "-i", input,
+			"-vcodec", "libwebp",
+			"-filter:v", "fps=8,scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
+			"-loop", "0",
+			"-preset", "default",
+			"-an", "-vsync", "0",
+			"-q:v", "15", // Low Quality for longer duration
+			"-lossless", "0",
+			"-t", "00:01:00", // Max 60 seconds
+			output)
 	} else {
-		exec.Command("ffmpeg", "-y", "-i", input, "-vcodec", "libwebp", "-filter:v", "scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=white@0", output).Run()
+		// --- Static Image (High Quality) ---
+		// تصویر چونکہ ایک ہی فریم ہے، اس کی کوالٹی اچھی رکھتے ہیں۔
+		cmd = exec.Command("ffmpeg", "-y", "-i", input,
+			"-vcodec", "libwebp",
+			"-filter:v", "scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
+			output)
+	}
+
+	err = cmd.Run()
+	if err != nil {
+		fmt.Println("FFmpeg Error:", err)
+		replyMessage(client, v, "❌ Conversion failed.")
+		os.Remove(input)
+		return
 	}
 
 	finalData, _ := os.ReadFile(output)
-	up, _ := client.Upload(context.Background(), finalData, whatsmeow.MediaImage)
+
+	// --- Safety Size Check ---
+	// چونکہ تم نے کہا 2MB تک چل جاتا ہے، تو میں نے سیفٹی لمٹ 2.5MB رکھ دی ہے۔
+	// اگر 60 سیکنڈ کی ویڈیو اس کوالٹی پر بھی 2.5MB سے اوپر گئی تو واٹس ایپ شاید ایرر دے۔
+	if len(finalData) > 2500000 { 
+		replyMessage(client, v, "⚠️ Sticker is too heavy (>2.5MB). Try cutting the video a bit.")
+		os.Remove(input); os.Remove(output)
+		return
+	}
+
+	up, err := client.Upload(context.Background(), finalData, whatsmeow.MediaImage)
+	if err != nil {
+		fmt.Println("Upload Error:", err)
+		replyMessage(client, v, "❌ Upload failed.")
+		os.Remove(input); os.Remove(output)
+		return
+	}
 
 	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		StickerMessage: &waProto.StickerMessage{
@@ -67,8 +117,11 @@ func handleToSticker(client *whatsmeow.Client, v *events.Message) {
 			FileEncSHA256: up.FileEncSHA256,
 		},
 	})
-	os.Remove(input); os.Remove(output)
+
+	os.Remove(input)
+	os.Remove(output)
 }
+
 
 func handleToImg(client *whatsmeow.Client, v *events.Message) {
 	// 🛠️ ریپلائی نکالنے کا ایٹمی طریقہ
