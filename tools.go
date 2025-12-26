@@ -22,8 +22,7 @@ import (
 
 // ==================== ٹولز سسٹم ====================
 func handleToSticker(client *whatsmeow.Client, v *events.Message) {
-	// --- 1. 5 Minute Context Timeout Setup ---
-	// یہ سب سے اہم ہے۔ یہ 5 منٹ تک پروسیس کو زندہ رکھے گا۔
+	// 5 منٹ کا ٹائم آؤٹ (تاکہ بڑی فائل پروسیس ہو سکے)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -47,7 +46,6 @@ func handleToSticker(client *whatsmeow.Client, v *events.Message) {
 
 	react(client, v.Info.Chat, v.Info.ID, "✨")
 
-	// --- Download with Timeout ---
 	data, err := client.Download(ctx, media)
 	if err != nil {
 		fmt.Println("Download Failed:", err)
@@ -63,19 +61,20 @@ func handleToSticker(client *whatsmeow.Client, v *events.Message) {
 	var cmd *exec.Cmd
 
 	if isAnimated {
-		// --- Optimized for Loading Speed ---
-		// -compression_level 2: (Range 0-6). 6 سب سے زیادہ دباتا ہے، 0 سب سے ہلکا۔
-		// ہم نے 2 رکھا ہے تاکہ فائل جلدی ڈیکوڈ (Play) ہو جائے اور "لوڈنگ" پر نہ اٹکے۔
+		// --- The "Anti-Retry" Logic ---
+		// fps=5: 30 سیکنڈ میں صرف 150 فریمز بنیں گے (یہ واٹس ایپ ہینڈل کر سکتا ہے)
+		// compression_level 6: یہ فائل کو نچوڑ کر سب سے چھوٹا کر دے گا تاکہ "Retry" نہ آئے۔
+		// q:v 10: کوالٹی لو ہوگی لیکن اسٹیکر پلے ہو جائے گا۔
 		cmd = exec.CommandContext(ctx, "ffmpeg", "-y", "-i", input,
 			"-vcodec", "libwebp",
-			"-filter:v", "fps=8,scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
+			"-filter:v", "fps=5,scale=512:512:force_original_aspect_ratio=increase,crop=512:512",
 			"-loop", "0",
 			"-preset", "default",
 			"-an", "-vsync", "0",
-			"-q:v", "15",            // Low Quality to keep size small
+			"-q:v", "10",            // Lowest viable quality
 			"-lossless", "0",
-			"-compression_level", "2", // Fast decoding logic added
-			"-t", "00:01:00",        // 60 Seconds limit
+			"-compression_level", "6", // Maximum Compression (Takes CPU but makes file safe)
+			"-t", "00:01:00",        // 60 Seconds Limit
 			output)
 	} else {
 		cmd = exec.CommandContext(ctx, "ffmpeg", "-y", "-i", input,
@@ -84,34 +83,33 @@ func handleToSticker(client *whatsmeow.Client, v *events.Message) {
 			output)
 	}
 
-	// --- Convert with Timeout ---
 	err = cmd.Run()
 	if err != nil {
-		fmt.Println("FFmpeg Error (Check timeout):", err)
-		replyMessage(client, v, "❌ Conversion failed or timed out.")
+		fmt.Println("FFmpeg Error:", err)
+		replyMessage(client, v, "❌ Video conversion failed.")
 		os.Remove(input)
 		return
 	}
 
 	finalData, _ := os.ReadFile(output)
 
-	// --- Safety Check (2.5MB) ---
-	if len(finalData) > 5000000 {
-		replyMessage(client, v, "⚠️ Sticker too heavy (>2.5MB).")
+	// --- Strict Size Limit ---
+	// اگر فائل اب بھی 1MB سے اوپر جا رہی ہے تو اسے روک دینا بہتر ہے ورنہ پھر Retry آئے گا۔
+	// زیادہ تر Retry تب آتا ہے جب فائل 1MB کے قریب ہو۔
+	if len(finalData) > 1500000 { // Limit set to 1.5MB
+		replyMessage(client, v, "⚠️ Resulting sticker is still too heavy for WhatsApp.")
 		os.Remove(input); os.Remove(output)
 		return
 	}
 
-	// --- Upload with Timeout ---
 	up, err := client.Upload(ctx, finalData, whatsmeow.MediaImage)
 	if err != nil {
 		fmt.Println("Upload Error:", err)
-		replyMessage(client, v, "❌ Upload timed out.")
+		replyMessage(client, v, "❌ Upload failed.")
 		os.Remove(input); os.Remove(output)
 		return
 	}
 
-	// --- Send Message ---
 	client.SendMessage(ctx, v.Info.Chat, &waProto.Message{
 		StickerMessage: &waProto.StickerMessage{
 			URL:           proto.String(up.URL),
@@ -127,6 +125,7 @@ func handleToSticker(client *whatsmeow.Client, v *events.Message) {
 	os.Remove(input)
 	os.Remove(output)
 }
+
 
 
 func handleToImg(client *whatsmeow.Client, v *events.Message) {
