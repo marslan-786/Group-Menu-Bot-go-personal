@@ -70,7 +70,7 @@ func handleToSticker(client *whatsmeow.Client, v *events.Message) {
 			"-preset", "default",
 			"-an", "-vsync", "0",
 			"-q:v", "40", // Quality control specifically for WebP
-			"-t", "00:00:30", // Max duration 6 seconds
+			"-t", "00:00:15", // Max duration 6 seconds
 			output)
 		
 		err = cmd.Run()
