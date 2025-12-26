@@ -314,6 +314,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		if len(words) == 0 { return }
 
 		cmd := strings.ToLower(words[0])
+		args := parts[1:] 
 		fullArgs := strings.TrimSpace(strings.Join(words[1:], " "))
 
 		// Check Permission
