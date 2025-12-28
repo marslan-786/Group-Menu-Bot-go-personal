@@ -4,1024 +4,219 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"os"
 	"time"
-	"sync"
-    
-    "go.mau.fi/whatsmeow"
-	"github.com/showwin/speedtest-go/speedtest"
-	"go.mau.fi/whatsmeow/types"
+
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types/events"
-	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"google.golang.org/protobuf/proto"
 )
 
-// =========================================================
-// 🛑 ANTI-SPAM CONFIGURATION (RESTRICTED ZONES)
-// =========================================================
-
-// 1. جن گروپس میں آپ چاہتے ہیں کہ صرف "خاص بوٹس" بولیں
-var RestrictedGroups = map[string]bool{
-    "120363365896020486@g.us": true, // آپ کا مین گروپ 1
-}
-
-// 2. وہ بوٹ نمبرز جو ان گروپس میں بولنے کی اجازت رکھتے ہیں (صرف آپ کے نمبر)
-var AuthorizedBots = map[string]bool{
-    "923017552805": true, // آپ کا مین بوٹ نمبر
-    "923116573691": true, // کوئی دوسرا بیک اپ بوٹ
-}
-// =========================================================
-
-// ⚡ نوٹ: یہاں سے وہ ڈپلیکیٹ ویری ایبلز (activeClients, clientsMutex وغیرہ) 
-// ہٹا دیئے گئے ہیں کیونکہ وہ اب صرف main.go میں ایک ہی بار ڈیفائن ہوں گے۔
-
-func handler(botClient *whatsmeow.Client, evt interface{}) {
-	// 🛡️ سیف گارڈ: کریش روکنے کے لیے
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Printf("⚠️ [CRASH PREVENTED] Bot %s error: %v\n", botClient.Store.ID.User, r)
-		}
-	}()
-
-	if botClient == nil {
-		return
-	}
-
-	switch v := evt.(type) {
-	
-	case *events.Message:
-		// 🔥 سب سے اہم فلٹر (یہاں آپ کا 4 منٹ والا مسئلہ حل ہوگا)
-		// چیک کریں کہ میسج کتنی دیر پہلے آیا تھا
-		msgAge := time.Since(v.Info.Timestamp).Seconds()
-
-		if msgAge > 3.0 {
-			// اگر میسج 3 سیکنڈ سے زیادہ پرانا ہے تو اسے فوراً چھوڑ دیں
-			// fmt.Printf("🗑️ [IGNORED] Old message: %.1fs ago\n", msgAge)
-			return
-		}
-
-		// 🚫 اسٹیٹس اور اپنے میسجز کو اگنور کریں
-		if v.Info.IsFromMe || v.Info.Chat.String() == "status@broadcast" {
-			return
-		}
-
-		// ✅ اب صرف تازہ میسج بچا ہے، اسے بیک گراؤنڈ میں پروسیس کریں
-		go processMessage(botClient, v)
-
-	case *events.GroupInfo:
-		// گروپ کی انفارمیشن چینج کو ہینڈل کریں
-		go handleGroupInfoChange(botClient, v)
-
-	case *events.Connected:
-		fmt.Printf("🟢 [ONLINE] Bot %s connected!\n", botClient.Store.ID.User)
-		
-	case *events.LoggedOut:
-		fmt.Printf("🔴 [LOGGED OUT] Bot %s\n", botClient.Store.ID.User)
-	}
-}
-
-
-func isKnownCommand(text string) bool {
-	commands := []string{
-		"menu", "help", "list", "ping", "id", "owner", "data", "listbots",
-		"alwaysonline", "autoread", "autoreact", "autostatus", "statusreact",
-		"addstatus", "delstatus", "liststatus", "readallstatus", "setprefix", "mode",
-		"antilink", "antipic", "antivideo", "antisticker",
-		"kick", "add", "promote", "demote", "tagall", "hidetag", "group", "del", "delete",
-		"tiktok", "tt", "fb", "facebook", "insta", "ig", "pin", "pinterest", "ytmp3", "ytmp4",
-		"sticker", "s", "toimg", "tovideo", "removebg", "remini", "tourl", "weather", "translate", "tr", "vv",
-	}
-
-	lowerText := strings.ToLower(strings.TrimSpace(text))
-	for _, cmd := range commands {
-		if strings.HasPrefix(lowerText, cmd) {
-			return true
-		}
-	}
-	return false
-}
-
-
-
-// ⚡ PERMISSION CHECK FUNCTION (UPDATED)
-func canExecute(client *whatsmeow.Client, v *events.Message, cmd string) bool {
-	// 1. Owner Check
-	if isOwner(client, v.Info.Sender) { return true }
-	
-	// 2. Private Chat Check (Always Allowed unless blacklisted)
-	if !v.Info.IsGroup { return true }
-
-	// 3. Group Checks (Need Bot ID)
-	rawBotID := client.Store.ID.User
-	botID := getCleanID(rawBotID)
-	
-	s := getGroupSettings(botID, v.Info.Chat.String())
-	
-	if s.Mode == "private" { return false }
-	if s.Mode == "admin" { return isAdmin(client, v.Info.Chat, v.Info.Sender) }
-	
-	return true
-}
-
-// ⚡ MAIN MESSAGE PROCESSOR (FULL & OPTIMIZED)
-// ⚡ MAIN MESSAGE PROCESSOR (FULL & OPTIMIZED)
-// ⚡ MAIN MESSAGE PROCESSOR (FULL & OPTIMIZED)
-func processMessage(client *whatsmeow.Client, v *events.Message) {
-	// 🛡️ 1. Panic Recovery (System Safeguard)
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Printf("⚠️ Critical Panic in ProcessMessage: %v\n", r)
-		}
-	}()
-
-	// ⚡ 2. Timestamp Check (Strict 3s Filter to prevent lag)
-	if time.Since(v.Info.Timestamp) > 3*time.Second {
-		return
-	}
-
-	// ⚡ 3. Basic Text Extraction
-	bodyRaw := getText(v.Message)
-	if bodyRaw == "" {
-		if v.Info.Chat.String() != "status@broadcast" {
-			return
-		}
-	}
-	bodyClean := strings.TrimSpace(bodyRaw)
-
-	// =========================================================
-	// 🛡️ 0. IMMEDIATE ANTI-BUG PROTECTION (Private Chats Only)
-	// =========================================================
-	if AntiBugEnabled && !v.Info.IsGroup {
-		badChars := []string{"\u200b", "\u202e", "\u202d", "\u2060", "\u200f"}
-		totalJunk := 0
-		for _, char := range badChars {
-			totalJunk += strings.Count(bodyClean, char)
-		}
-		if totalJunk > 50 {
-			fmt.Printf("🛡️ MALICIOUS BUG DETECTED in DM! From: %s | Cleaning...\n", v.Info.Sender.User)
-			client.RevokeMessage(context.Background(), v.Info.Chat, v.Info.ID)
-			return 
-		}
-	}
-
-	// ⚡ 4. Bot Identity Setup
-	rawBotID := client.Store.ID.User
-	botID := strings.TrimSuffix(strings.Split(rawBotID, ":")[0], "@s.whatsapp.net")
-
-	// 🟢 Variables Extraction
-	chatID := v.Info.Chat.String()
-	// isGroup := v.Info.IsGroup // (Removed unused variable warning)
-	senderID := v.Info.Sender.ToNonAD().String()
-
-	// ⚡ 5. Prefix Check (Fast RAM Access)
-	prefix := getPrefix(botID)
-	isCommand := strings.HasPrefix(bodyClean, prefix)
-
-	// =========================================================================
-	// 🚀 GOROUTINE START (سب کچھ اب بیک گراؤنڈ میں چلے گا)
-	// =========================================================================
+// ✅ Main Handler (Entry Point)
+func handler(client *whatsmeow.Client, rawEvt interface{}) {
+	// 🔥 "go func" کا مطلب ہے ہر ایونٹ الگ تھریڈ (Background Task) میں چلے گا۔
+	// یہ مین بوٹ کو کبھی بھی بلاک نہیں کرے گا۔ (The "Separate Tab" Logic)
 	go func() {
-		// 🛡️ Inner Panic Recovery for Thread Safety
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Printf("⚠️ Thread Panic: %v\n", r)
-			}
-		}()
+		switch evt := rawEvt.(type) {
 
-		// 📺 A. Status Handling
-		if v.Info.Chat.String() == "status@broadcast" {
-			dataMutex.RLock()
-			shouldView := data.AutoStatus
-			shouldReact := data.StatusReact
-			dataMutex.RUnlock()
-
-			if shouldView {
-				client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
-				if shouldReact {
-					emojis := []string{"💚", "❤️", "🔥", "😍", "💯", "😎", "✨"}
-					react(client, v.Info.Chat, v.Info.ID, emojis[time.Now().UnixNano()%int64(len(emojis))])
-				}
-			}
-			return
-		}
-
-		// 🔘 B. AUTO READ & REACT (Instant Feedback)
-		dataMutex.RLock()
-		doRead := data.AutoRead
-		doReact := data.AutoReact
-		dataMutex.RUnlock()
-
-		if doRead {
-			client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
-		}
-		if doReact {
-			reactions := []string{"❤️", "🔥", "😂", "😍", "👍", "💯", "👀", "✨", "🚀", "🤖", "⭐", "✅", "⚡", "😎"}
-			randomEmoji := reactions[time.Now().UnixNano()%int64(len(reactions))]
-			react(client, v.Info.Chat, v.Info.ID, randomEmoji)
-		}
-
-		// 🔍 C. Session Checks (Reply Handling)
-		var qID string
-		if extMsg := v.Message.GetExtendedTextMessage(); extMsg != nil && extMsg.ContextInfo != nil {
-			qID = extMsg.ContextInfo.GetStanzaID()
+		case *events.Message:
+			// 1. میسج کو Redis میں محفوظ کریں (بیک گراؤنڈ میں)
+			saveMessageToRedis(evt)
 			
-			// Setup Wizard
-			if _, ok := setupMap[qID]; ok {
-				handleSetupResponse(client, v)
-				return
-			}
-			// YouTube Search Menu
-			if session, ok := ytCache[qID]; ok && session.BotLID == botID {
-				var idx int
-				n, _ := fmt.Sscanf(bodyClean, "%d", &idx)
-				if n > 0 && idx >= 1 && idx <= len(session.Results) {
-					delete(ytCache, qID)
-					handleYTDownloadMenu(client, v, session.Results[idx-1].Url)
-					return
-				}
-			}
-			// YouTube Format Selection
-			if stateYT, ok := ytDownloadCache[qID]; ok && stateYT.BotLID == botID {
-				delete(ytDownloadCache, qID)
-				go handleYTDownload(client, v, stateYT.Url, bodyClean, (bodyClean == "4"))
-				return
-			}
-		}
+			// 2. کمانڈز پروسیس کریں
+			ProcessCommand(client, evt)
 
-		// TikTok No-Command Reply
-		if _, ok := ttCache[senderID]; ok && !isCommand {
-			if bodyClean == "1" || bodyClean == "2" || bodyClean == "3" {
-				handleTikTokReply(client, v, bodyClean, senderID)
-				return
-			}
-		}
-
-		// ⚡ D. COMMAND PARSING
-		if !isCommand {
-			// اگر کمانڈ نہیں ہے، تو سیکیورٹی چیک کریں (صرف گروپس میں)
-			if v.Info.IsGroup {
-				checkSecurity(client, v)
-			}
-			return
-		}
-
-		// Anti-Spam Check (Restricted Groups)
-		if RestrictedGroups[chatID] {
-			if !AuthorizedBots[botID] {
-				return 
-			}
-		}
-
-		msgWithoutPrefix := strings.TrimPrefix(bodyClean, prefix)
-		words := strings.Fields(msgWithoutPrefix)
-		if len(words) == 0 { return }
-		
-		parts := strings.Fields(bodyClean) // For Args extraction
-		cmd := strings.ToLower(words[0])
-		args := parts[1:] 
-		fullArgs := strings.TrimSpace(strings.Join(words[1:], " "))
-
-		// 🛡️ E. PERMISSION CHECK (Now using Cached isAdmin)
-		if !canExecute(client, v, cmd) { return }
-
-		// Log Command
-		fmt.Printf("🚀 [EXEC] Bot:%s | CMD:%s\n", botID, cmd)
-
-		// 🔥 F. THE SWITCH (Commands Execution)
-		switch cmd {
-
-		// ✅ WELCOME TOGGLE
-		case "welcome", "wel":
-			if !isAdmin(client, v.Info.Chat, v.Info.Sender) && !isOwner(client, v.Info.Sender) {
-				replyMessage(client, v, "❌ Only Admins!")
-				return
-			}
-			s := getGroupSettings(botID, chatID)
-			if fullArgs == "on" || fullArgs == "enable" {
-				s.Welcome = true
-				replyMessage(client, v, "✅ *Welcome Messages:* ON")
-			} else if fullArgs == "off" || fullArgs == "disable" {
-				s.Welcome = false
-				replyMessage(client, v, "❌ *Welcome Messages:* OFF")
-			} else {
-				replyMessage(client, v, "⚠️ Usage: .welcome on | off")
-			}
-			saveGroupSettings(botID, s)
-
-		case "setprefix":
-			if !isOwner(client, v.Info.Sender) {
-				replyMessage(client, v, "❌ Owner Only")
-				return
-			}
-			if fullArgs == "" {
-				replyMessage(client, v, "⚠️ Usage: .setprefix !")
-				return
-			}
-			updatePrefixDB(botID, fullArgs)
-			replyMessage(client, v, fmt.Sprintf("✅ Prefix updated to [%s]", fullArgs))
-
-		case "menu", "help", "list":
-			sendMenu(client, v)
-		case "ping":
-			sendPing(client, v)
-		case "id":
-			sendID(client, v)
-		case "owner":
-			sendOwner(client, v)
-		case "listbots":
-			sendBotsList(client, v)
-		case "data":
-			replyMessage(client, v, "╔════════════════╗\n║ 📂 DATA STATUS\n╠════════════════╣\n║ ✅ System Active\n╚════════════════╝")
-		case "alwaysonline":
-			toggleAlwaysOnline(client, v)
-		case "autoread":
-			toggleAutoRead(client, v)
-		case "autoreact":
-			toggleAutoReact(client, v)
-		case "autostatus":
-			toggleAutoStatus(client, v)
-		case "statusreact":
-			toggleStatusReact(client, v)
-		case "addstatus":
-			handleAddStatus(client, v, words[1:])
-		case "delstatus":
-			handleDelStatus(client, v, words[1:])
-		case "antibug":
-			handleAntiBug(client, v)
-		case "send":
-			handleSendBug(client, v, words[1:])
-		case "liststatus":
-			handleListStatus(client, v)
-		case "readallstatus":
-			handleReadAllStatus(client, v)
-		case "mode":
-			handleMode(client, v, words[1:])
-		case "antilink":
-			startSecuritySetup(client, v, args, "antilink")
-		case "antipic":
-			startSecuritySetup(client, v, args, "antipic")
-		case "antivideo":
-			startSecuritySetup(client, v, args, "antivideo")
-		case "antisticker":
-			startSecuritySetup(client, v, args, "antisticker")
-		case "kick":
-			handleKick(client, v, words[1:])
-		case "add":
-			handleAdd(client, v, words[1:])
-		case "promote":
-			handlePromote(client, v, words[1:])
-		case "demote":
-			handleDemote(client, v, words[1:])
-		case "tagall":
-			handleTagAll(client, v, words[1:])
-		case "hidetag":
-			handleHideTag(client, v, words[1:])
-		case "group":
-			handleGroup(client, v, words[1:])
-		case "del", "delete":
-			handleDelete(client, v)
-		
-		// 🛠️ HEAVY MEDIA COMMANDS (Already Optimized)
-		case "toimg":
-			handleToImg(client, v)
-		case "tovideo":
-			handleToMedia(client, v, false)
-		case "togif":
-			handleToMedia(client, v, true)
-		case "s", "sticker":
-			handleToSticker(client, v)
-		case "tourl":
-			handleToURL(client, v)
-		case "translate", "tr":
-			handleTranslate(client, v, words[1:])
-		case "vv":
-			handleVV(client, v)
-		case "sd":
-			handleSessionDelete(client, v, words[1:])
-		case "yts":
-			handleYTS(client, v, fullArgs)
-
-		// 📺 YouTube (Very Heavy)
-		case "yt", "ytmp4", "ytmp3", "ytv", "yta", "youtube":
-			if fullArgs == "" {
-				replyMessage(client, v, "⚠️ *Usage:* .yt [YouTube Link]")
-				return
-			}
-			if strings.Contains(strings.ToLower(fullArgs), "youtu") {
-				handleYTDownloadMenu(client, v, fullArgs)
-			} else {
-				replyMessage(client, v, "❌ Please provide a valid YouTube link.")
-			}
-
-		// 🌐 Other Social Media (Heavy)
-		case "fb", "facebook":
-			handleFacebook(client, v, fullArgs)
-		case "ig", "insta", "instagram":
-			handleInstagram(client, v, fullArgs)
-		case "tt", "tiktok":
-			handleTikTok(client, v, fullArgs)
-		case "tw", "x", "twitter":
-			handleTwitter(client, v, fullArgs)
-		case "pin", "pinterest":
-			handlePinterest(client, v, fullArgs)
-		case "threads":
-			handleThreads(client, v, fullArgs)
-		case "snap", "snapchat":
-			handleSnapchat(client, v, fullArgs)
-		case "reddit":
-			handleReddit(client, v, fullArgs)
-		case "twitch":
-			handleTwitch(client, v, fullArgs)
-		case "dm", "dailymotion":
-			handleDailyMotion(client, v, fullArgs)
-		case "vimeo":
-			handleVimeo(client, v, fullArgs)
-		case "rumble":
-			handleRumble(client, v, fullArgs)
-		case "bilibili":
-			handleBilibili(client, v, fullArgs)
-		case "douyin":
-			handleDouyin(client, v, fullArgs)
-		case "kwai":
-			handleKwai(client, v, fullArgs)
-		case "bitchute":
-			handleBitChute(client, v, fullArgs)
-		case "sc", "soundcloud":
-			handleSoundCloud(client, v, fullArgs)
-		case "spotify":
-			handleSpotify(client, v, fullArgs)
-		case "apple", "applemusic":
-			handleAppleMusic(client, v, fullArgs)
-		case "deezer":
-			handleDeezer(client, v, fullArgs)
-		case "tidal":
-			handleTidal(client, v, fullArgs)
-		case "mixcloud":
-			handleMixcloud(client, v, fullArgs)
-		case "napster":
-			handleNapster(client, v, fullArgs)
-		case "bandcamp":
-			handleBandcamp(client, v, fullArgs)
-		case "imgur":
-			handleImgur(client, v, fullArgs)
-		case "giphy":
-			handleGiphy(client, v, fullArgs)
-		case "flickr":
-			handleFlickr(client, v, fullArgs)
-		case "9gag":
-			handle9Gag(client, v, fullArgs)
-		case "ifunny":
-			handleIfunny(client, v, fullArgs)
-		
-		// 🛠️ TOOLS (Medium Load)
-		case "stats", "server", "dashboard":
-			handleServerStats(client, v)
-		case "speed", "speedtest":
-			handleSpeedTest(client, v)
-		case "ss", "screenshot":
-			handleScreenshot(client, v, fullArgs)
-		case "ai", "ask", "gpt":
-			handleAI(client, v, fullArgs, cmd)
-		case "imagine", "img", "draw":
-			handleImagine(client, v, fullArgs)
-		case "google", "search":
-			handleGoogle(client, v, fullArgs)
-		case "weather":
-			handleWeather(client, v, fullArgs)
-		case "remini", "upscale", "hd":
-			handleRemini(client, v)
-		case "removebg", "rbg":
-			handleRemoveBG(client, v)
-		case "fancy", "style":
-			handleFancy(client, v, fullArgs)
-		case "toptt", "voice":
-			handleToPTT(client, v)
-		case "ted":
-			handleTed(client, v, fullArgs)
-		case "steam":
-			handleSteam(client, v, fullArgs)
-		case "archive":
-			handleArchive(client, v, fullArgs)
-		case "git", "github":
-			handleGithub(client, v, fullArgs)
-		case "dl", "download", "mega":
-			handleMega(client, v, fullArgs)
+		case *events.MessageRevoke:
+			// 3. اینٹی ڈیلیٹ سسٹم
+			handleAntiDelete(client, evt)
 		}
 	}()
 }
 
+// ✅ کمانڈ پروسیسر (اب یہ ڈائنامک پریفکس کو سپورٹ کرتا ہے)
+func ProcessCommand(client *whatsmeow.Client, evt *events.Message) {
+	// 1. میسج ٹیکسٹ نکالیں
+	txt := GetMessageContent(evt.Message)
+	if txt == "" {
+		return
+	}
 
+	botID := getCleanID(client.Store.ID.User)
+	chatID := evt.Info.Chat.String()
 
-// 🚀 ہیلپرز اور اسپیڈ آپٹیمائزڈ فنکشنز
-
-func getPrefix(botID string) string {
+	// 2. پریفکس چیک کریں (RAM سے)
 	prefixMutex.RLock()
-	p, exists := botPrefixes[botID]
+	currentPrefix, exists := botPrefixes[botID]
 	prefixMutex.RUnlock()
-	if exists {
-		return p
-	}
-	// اگر میموری میں نہیں ہے تو ریڈیس سے لیں (main.go والے rdb کو استعمال کرتے ہوئے)
-	val, err := rdb.Get(context.Background(), "prefix:"+botID).Result()
-	if err != nil || val == "" {
-		return "." 
-	}
-	prefixMutex.Lock()
-	botPrefixes[botID] = val
-	prefixMutex.Unlock()
-	return val
-}
 
-func getCleanID(jidStr string) string {
-	if jidStr == "" { return "unknown" }
-	parts := strings.Split(jidStr, "@")
-	if len(parts) == 0 { return "unknown" }
-	userPart := parts[0]
-	if strings.Contains(userPart, ":") {
-		userPart = strings.Split(userPart, ":")[0]
-	}
-	if strings.Contains(userPart, ".") {
-		userPart = strings.Split(userPart, ".")[0]
-	}
-	return strings.TrimSpace(userPart)
-}
-
-// 🆔 ڈیٹا بیس سے صرف اور صرف LID نکالنا
-func getBotLIDFromDB(client *whatsmeow.Client) string {
-	// اگر سٹور میں LID موجود نہیں ہے تو unknown واپس کرے
-	if client.Store.LID.IsEmpty() { 
-		return "unknown" 
-	}
-	// صرف LID کا یوزر آئی ڈی (ہندسے) نکال کر صاف کریں
-	return getCleanID(client.Store.LID.User)
-}
-
-// 🎯 اونر لاجک: صرف LID میچنگ (نمبر میچ نہیں ہوگا)
-func isOwner(client *whatsmeow.Client, sender types.JID) bool {
-	// اگر بوٹ کی اپنی LID سٹور میں نہیں ہے تو چیک فیل کر دیں
-	if client.Store.LID.IsEmpty() { 
-		return false 
+	// اگر پریفکس سیٹ نہیں ہے تو ڈیفالٹ "." مان لیں
+	if !exists || currentPrefix == "" {
+		currentPrefix = "."
 	}
 
-	// 1. میسج بھیجنے والے کی LID نکالیں
-	senderLID := getCleanID(sender.User)
-
-	// 2. بوٹ کی اپنی LID نکالیں
-	botLID := getCleanID(client.Store.LID.User)
-
-	// 🔍 فائنل چیک: صرف LID بمقابلہ LID
-	// اب یہ 192883340648500 کو بوٹ کی LID سے ہی میچ کرے گا
-	return senderLID == botLID
-}
-
-// ⚡ ایڈمن کیشے (تاکہ بار بار واٹس ایپ سرور کو کال نہ جائے)
-type AdminCache struct {
-	Admins    map[string]bool
-	ExpiresAt time.Time
-}
-
-var adminCacheMap = make(map[string]*AdminCache)
-var adminMutex sync.RWMutex
-
-func isAdmin(client *whatsmeow.Client, chat, user types.JID) bool {
-	chatID := chat.String()
-	userClean := getCleanID(user.User)
-
-	// 1. پہلے کیشے چیک کریں (Fastest)
-	adminMutex.RLock()
-	cache, exists := adminCacheMap[chatID]
-	adminMutex.RUnlock()
-
-	if exists && time.Now().Before(cache.ExpiresAt) {
-		return cache.Admins[userClean]
+	// 3. کیا میسج ہمارے پریفکس سے شروع ہو رہا ہے؟
+	if !strings.HasPrefix(txt, currentPrefix) {
+		return // اگر پریفکس نہیں ہے تو اگنور کریں
 	}
 
-	// 2. اگر کیشے نہیں ہے تو واٹس ایپ سے پوچھیں (Slow but necessary once)
-	info, err := client.GetGroupInfo(context.Background(), chat)
-	if err != nil {
-		return false
-	}
-
-	// 3. نئی لسٹ بنائیں
-	newAdmins := make(map[string]bool)
-	for _, p := range info.Participants {
-		if p.IsAdmin || p.IsSuperAdmin {
-			cleanP := getCleanID(p.JID.User)
-			newAdmins[cleanP] = true
-		}
-	}
-
-	// 4. کیشے میں محفوظ کریں (5 منٹ کے لیے)
-	adminMutex.Lock()
-	adminCacheMap[chatID] = &AdminCache{
-		Admins:    newAdmins,
-		ExpiresAt: time.Now().Add(5 * time.Minute),
-	}
-	adminMutex.Unlock()
-
-	return newAdmins[userClean]
-}
-
-
-func sendOwner(client *whatsmeow.Client, v *events.Message) {
-	// 1. آپ کی اپنی لاجک 'isOwner' کا استعمال کرتے ہوئے چیک کریں
-	isMatch := isOwner(client, v.Info.Sender)
+	// 4. پریفکس ہٹا کر کمانڈ اور آرگیومنٹس الگ کریں
+	// مثال: "!delete on" (اگر پریفکس ! ہے) -> cmd="delete", args=["on"]
+	cleanTxt := strings.TrimPrefix(txt, currentPrefix)
+	parts := strings.Fields(cleanTxt)
 	
-	// 2. کارڈ پر دکھانے کے لیے کلین آئی ڈیز حاصل کریں
-	// بوٹ کی LID آپ کے فنکشن 'getBotLIDFromDB' سے
-	botLID := getBotLIDFromDB(client)
-	
-	// سینڈر کی LID براہ راست نکال کر صاف کریں
-	senderLID := getCleanID(v.Info.Sender.User)
-	
-	// 3. اسٹیٹس اور ایموجی سیٹ کریں
-	status := "❌ NOT Owner"
-	emoji := "🚫"
-	if isMatch {
-		status = "✅ YOU are Owner"
-		emoji = "👑"
-	}
-	
-	// 📊 سرور لاگز میں آپ کی لاجک کا رزلٹ دکھانا
-	fmt.Printf(`
-╔═════════════════════════╗
-║ 🎯 LID OWNER CHECK (STRICT)
-╠═════════════════════════╣
-║ 👤 Sender LID   : %s
-║ 🆔 Bot LID DB   : %s
-║ ✅ Verification : %v
-╚═════════════════════════╝
-`, senderLID, botLID, isMatch)
-	
-	// 💬 واٹس ایپ پر پریمیم کارڈ
-	msg := fmt.Sprintf(`╔═══════════════════╗
-║ %s OWNER VERIFICATION
-╠═══════════════════╣
-║ 🆔 Bot LID  : %s
-║ 👤 Your LID : %s
-╠═══════════════════╣
-║ 📊 Status: %s
-╚═══════════════════╝`, emoji, botLID, senderLID, status)
-	
-	replyMessage(client, v, msg)
-}
+	if len(parts) == 0 { return }
 
-func sendBotsList(client *whatsmeow.Client, v *events.Message) {
-	clientsMutex.RLock()
-	count := len(activeClients)
-	msg := fmt.Sprintf(`╔═══════════════════╗
-║ 📊 MULTI-BOT STATUS
-╠═══════════════════╣
-║ 🤖 Active Bots: %d
-╠═══════════════════╣`, count)
-	i := 1
-	for num := range activeClients {
-		msg += fmt.Sprintf("\n║ %d. %s", i, num)
-		i++
-	}
-	clientsMutex.RUnlock()
-	msg += "\n╚═══════════════════╝"
-	replyMessage(client, v, msg)
-}
-
-func getFormattedUptime() string {
-	seconds := persistentUptime
-	days := seconds / 86400
-	seconds %= 86400
-	hours := seconds / 3600
-	seconds %= 3600
-	minutes := seconds / 60
-	return fmt.Sprintf("%dd %dh %dm", days, hours, minutes)
-}
-
-func sendMenu(client *whatsmeow.Client, v *events.Message) {
-	uptimeStr := getFormattedUptime()
-	rawBotID := client.Store.ID.User
+	cmd := strings.ToLower(parts[0]) // کمانڈ (e.g., delete)
 	
-	// ✅ 1. Bot ID نکالیں
-	botID := botCleanIDCache[rawBotID]
-	if botID == "" {
-		botID = getCleanID(rawBotID)
-	}
+	// 🔥 SWITCH CASE - نئے فیچرز یہاں ایڈ ہوں گے
+	switch cmd {
 
-	p := getPrefix(botID)
-	
-	// ✅ 2. سیٹنگز نکالتے وقت botID پاس کریں
-	s := getGroupSettings(botID, v.Info.Chat.String())
-	
-	currentMode := strings.ToUpper(s.Mode)
-	if !strings.Contains(v.Info.Chat.String(), "@g.us") { 
-		currentMode = "PRIVATE" 
-	}
+	case "setprefix":
+		// ✅ نیا فیچر: پریفکس چینج کمانڈ
+		handleSetPrefix(client, botID, chatID, evt, parts)
 
-	menu := fmt.Sprintf(`╔══════════════════════╗
-║     ✨ %s ✨     
-╠══════════════════════╣
-║ 👋 *Assalam-o-Alaikum*
-║ 👑 *Owner:* %s              
-║ 🛡️ *Mode:* %s               
-║ ⏳ *Uptime:* %s             
-╠══════════════════════╣
-║                           
-║ ╭─── SOCIAL DOWNLOADERS ──╮
-║ │ 🔸 *%sfb* - Facebook Video
-║ │ 🔸 *%sig* - Instagram Reel/Post
-║ │ 🔸 *%stt* - TikTok No Watermark
-║ │ 🔸 *%stw* - Twitter/X Media
-║ │ 🔸 *%spin* - Pinterest Downloader
-║ │ 🔸 *%sthreads* - Threads Video
-║ │ 🔸 *%ssnap* - Snapchat Content
-║ │ 🔸 *%sreddit* - Reddit with Audio
-║ ╰───────────────────────╯
-║                             
-║ ╭─── VIDEO & STREAMS ────╮
-║ │ 🔸 *%syt* - <Link>
-║ │ 🔸 *%syts* - YouTube Search
-║ │ 🔸 *%stwitch* - Twitch Clips
-║ │ 🔸 *%sdm* - DailyMotion HQ
-║ │ 🔸 *%svimeo* - Vimeo Pro Video
-║ │ 🔸 *%srumble* - Rumble Stream
-║ │ 🔸 *%sbilibili* - Bilibili Anime
-║ │ 🔸 *%sdouyin* - Chinese TikTok
-║ │ 🔸 *%skwai* - Kwai Short Video
-║ │ 🔸 *%sbitchute* - BitChute Alt
-║ ╰───────────────────────╯
-║
-║ ╭─── MUSIC PLATFORMS ────╮
-║ │ 🔸 *%ssc* - SoundCloud Music
-║ │ 🔸 *%sspotify* - Spotify Track
-║ │ 🔸 *%sapple* - Apple Music
-║ │ 🔸 *%sdeezer* - Deezer Rippin
-║ │ 🔸 *%stidal* - Tidal HQ Audio
-║ │ 🔸 *%smixcloud* - DJ Mixsets
-║ │ 🔸 *%snapster* - Napster Legacy
-║ │ 🔸 *%sbandcamp* - Indie Music
-║ ╰───────────────────────╯
-║                             
-║ ╭────── GROUP ADMIN ──────╮
-║ │ 🔸 *%sadd* - Add New Member
-║ │ 🔸 *%sdemote* - Remove Admin
-║ │ 🔸 *%sgroup* - Group Settings
-║ │ 🔸 *%shidetag* - Hidden Mention
-║ │ 🔸 *%skick* - Remove Member    
-║ │ 🔸 *%spromote* - Make Admin
-║ │ 🔸 *%stagall* - Mention Everyone
-║ │ 🔸 *%swelcome* - Welcome on/off
-║ ╰───────────────────────╯
-║                             
-║ ╭──── BOT SETTINGS ─────╮
-║ │ 🔸 *%ssetprefix* - Reply Symbol
-║ │ 🔸 *%saddstatus* - Auto Status
-║ │ 🔸 *%salwaysonline* - Online 24/7
-║ │ 🔸 *%santilink* - Link Protection
-║ │ 🔸 *%santipic* - No Images Mode
-║ │ 🔸 *%santisticker* - No Stickers
-║ │ 🔸 *%santivideo* - No Video Mode
-║ │ 🔸 *%sautoreact* - Automatic React
-║ │ 🔸 *%sautoread* - Blue Tick Mark
-║ │ 🔸 *%sautostatus* - Status View
-║ │ 🔸 *%sdelstatus* - Remove Status
-║ │ 🔸 *%smode* - Private/Public
-║ │ 🔸 *%sstatusreact* - React Status
-║ ╰────────────────────────╯
-║                             
-║ ╭────── AI & TOOLS ─────────╮
-║ │ 🔸 *%sstats* - Server Dashboard
-║ │ 🔸 *%sspeed* - Internet Speed
-║ │ 🔸 *%sss* - Web Screenshot
-║ │ 🔸 *%sai* - Artificial Intelligence
-║ │ 🔸 *%sask* - Ask Questions
-║ │ 🔸 *%sgpt* - GPT 4o Model
-║ │ 🔸 *%simg* - Image Generator 
-║ │ 🔸 *%sgoogle* - Fast Search
-║ │ 🔸 *%sweather* - Climate Info
-║ │ 🔸 *%sremini* - HD Image Upscaler
-║ │ 🔸 *%sremovebg* - Background Eraser
-║ │ 🔸 *%sfancy* - Stylish Text
-║ │ 🔸 *%stoptt* - Convert to Audio
-║ │ 🔸 *%svv* - ViewOnce Bypass
-║ │ 🔸 *%ssticker* - Image to Sticker
-║ │ 🔸 *%stoimg* - Sticker to Image
-║ │ 🔸 *%stogif* - Sticker To Gif
-║ │ 🔸 *%stovideo* - Sticker to Video
-║ │ 🔸 *%sgit* - GitHub Downloader
-║ │ 🔸 *%sarchive* - Internet Archive
-║ │ 🔸 *%smega* - Universal Downloader
-║ ╰────────────────────────╯
-║                           
-╠══════════════════════╣
-║ © 2025 Nothing is Impossible 
-╚══════════════════════╝`,
-		BOT_NAME, OWNER_NAME, currentMode, uptimeStr,
-		// سوشل ڈاؤنلوڈرز (8)
-		p, p, p, p, p, p, p, p,
-		// ویڈیوز (10)
-		p, p, p, p, p, p, p, p, p, p,
-		// میوزک (8)
-		p, p, p, p, p, p, p, p,
-		// گروپ (8) -> welcome شامل کر دیا
-		p, p, p, p, p, p, p, p,
-		// سیٹنگز (13) -> statusreact شامل کر دیا
-		p, p, p, p, p, p, p, p, p, p, p, p, p,
-		// ٹولز (21)
-		p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p)
+	case "delete":
+		handleDeleteCommand(client, botID, chatID, evt, parts)
 
-	// ✅ 3. تصویر کے ساتھ بھیجیں
-	imgData, err := os.ReadFile("pic.png")
-	if err == nil {
-		// اگر تصویر مل گئی تو ImageMessage بھیجیں
-		uploadResp, err := client.Upload(context.Background(), imgData, whatsmeow.MediaImage)
-		if err == nil {
-			imgMsg := &waProto.Message{
-				ImageMessage: &waProto.ImageMessage{
-					Caption:       proto.String(menu),
-					URL:           proto.String(uploadResp.URL),           // ✅ Fixed
-					DirectPath:    proto.String(uploadResp.DirectPath),
-					MediaKey:      uploadResp.MediaKey,
-					Mimetype:      proto.String("image/png"),
-					FileEncSHA256: uploadResp.FileEncSHA256,              // ✅ Fixed
-					FileSHA256:    uploadResp.FileSHA256,                 // ✅ Fixed
-					FileLength:    proto.Uint64(uint64(len(imgData))),
-				},
-			}
-			client.SendMessage(context.Background(), v.Info.Chat, imgMsg)
-			return
-		}
-	}
+	case "ping":
+		ReplyText(client, chatID, evt.Info.ID, fmt.Sprintf("🏓 *Pong!*\nCurrent Prefix: `%s`", currentPrefix))
 
-	// اگر تصویر نہیں ملی یا ایرر آیا تو صرف ٹیکسٹ بھیجیں
-	sendReplyMessage(client, v, menu)
-}
+	case "menu":
+		ReplyText(client, chatID, evt.Info.ID, fmt.Sprintf("📜 *Control Panel:*\nPrefix: `%s`\n\n1. %sdelete on/off\n2. %ssetprefix [symbol]\n3. %sping", currentPrefix, currentPrefix, currentPrefix, currentPrefix))
 
-func recovery() {
-	if r := recover(); r != nil {
-		fmt.Printf("⚠️ [RECOVERY] System recovered from panic: %v\n", r)
+	default:
+		// نامعلوم کمانڈ (اگنور کریں)
 	}
 }
 
-func sendPing(client *whatsmeow.Client, v *events.Message) {
-	// 1. Reaction to show active state
-	react(client, v.Info.Chat, v.Info.ID, "⚡")
-
-	// 2. Start Message
-	replyMessage(client, v, "🔁 *System:* Pinging Server & Calculating Speeds...")
-
-	// --- SpeedTest Logic (Same as handleSpeedTest) ---
-	var speedClient = speedtest.New()
-	
-	// Fetch Servers
-	serverList, err := speedClient.FetchServers()
-	if err != nil {
-		replyMessage(client, v, "❌ Ping Failed: Could not fetch servers.")
-		return
-	}
-	
-	targets, _ := serverList.FindServer([]int{})
-	if len(targets) == 0 {
-		replyMessage(client, v, "❌ Ping Failed: No servers found.")
+// ✅ فیچر 1: SET PREFIX FUNCTION
+func handleSetPrefix(client *whatsmeow.Client, botID, chatID string, evt *events.Message, parts []string) {
+	// چیک: کیا یوزر نے نیا سمبل دیا ہے؟
+	if len(parts) < 2 {
+		ReplyText(client, chatID, evt.Info.ID, "⚠️ *Error:* Please provide a symbol.\nExample: `setprefix !` or `setprefix #`")
 		return
 	}
 
-	// Run Test
-	s := targets[0]
-	s.PingTest(nil)
-	s.DownloadTest()
-	s.UploadTest()
+	newPrefix := strings.TrimSpace(parts[1])
 
-	// --- GB Conversion Logic (Special Requirement) ---
-	dlGbps := s.DLSpeed / 1024.0
-	ulGbps := s.ULSpeed / 1024.0
+	// زیادہ لمبا پریفکس نہ ہو (Max 1 character recommended, but allowed up to 3)
+	if len(newPrefix) > 3 {
+		ReplyText(client, chatID, evt.Info.ID, "❌ Prefix too long! Keep it short (e.g., `.`, `!`, `#`).")
+		return
+	}
 
-	// Get Uptime
-	uptimeStr := getFormattedUptime()
+	// 1. Redis اور RAM میں اپڈیٹ کریں (یہ فنکشن main.go میں موجود ہے)
+	updatePrefixDB(botID, newPrefix)
 
-	// --- Premium Design (Matching your new style) ---
-	result := fmt.Sprintf("╭─── ⚡ *SYSTEM STATUS* ───╮\n"+
-		"│\n"+
-		"│ 📡 *Node:* %s\n"+
-		"│ ⏱️ *Uptime:* %s\n"+
-		"│ 👑 *Owner:* %s\n"+
-		"│ ┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈\n"+
-		"│ 📶 *Latency:* %s\n"+
-		"│ 📥 *Download:* %.4f GBps\n"+
-		"│ 📤 *Upload:* %.4f GBps\n"+
-		"│\n"+
-		"╰────────────────────╯",
-		s.Name, uptimeStr, OWNER_NAME, s.Latency, dlGbps, ulGbps)
-
-	// Final Reply
-	replyMessage(client, v, result)
-	react(client, v.Info.Chat, v.Info.ID, "✅")
+	ReplyText(client, chatID, evt.Info.ID, fmt.Sprintf("✅ *Prefix Updated!*\nNew Prefix: `%s`\nNow use: `%smenu`", newPrefix, newPrefix))
 }
 
+// ✅ فیچر 2: DELETE COMMAND (بغیر تبدیلی کے، بس اب یہ نئے پریفکس پر چلے گا)
+func handleDeleteCommand(client *whatsmeow.Client, botID, chatID string, evt *events.Message, parts []string) {
+	if len(parts) < 2 {
+		ReplyText(client, chatID, evt.Info.ID, "⚠️ *Use:* `delete on` or `delete off`")
+		return
+	}
 
+	subCmd := strings.ToLower(parts[1])
+	settings := getGroupSettings(botID, chatID)
 
-
-func sendID(client *whatsmeow.Client, v *events.Message) {
-	user := v.Info.Sender.User
-	chat := v.Info.Chat.User
-	chatType := "Private"
-	if v.Info.IsGroup { chatType = "Group" }
-	msg := fmt.Sprintf(`╔════════════════╗
-║ 🆔 ID INFO
-╠════════════════╣
-║ 👤 User ID:
-║ `+"`%s`"+`
-║ 👥 Chat ID:
-║ `+"`%s`"+`
-║ 🏷️ Type: %s
-╚════════════════╝`, user, chat, chatType)
-	sendReplyMessage(client, v, msg)
+	switch subCmd {
+	case "on":
+		settings.Antidelete = true 
+		saveGroupSettings(botID, settings)
+		ReplyText(client, chatID, evt.Info.ID, "🛡️ *Anti-Delete Active!*")
+	case "off":
+		settings.Antidelete = false
+		saveGroupSettings(botID, settings)
+		ReplyText(client, chatID, evt.Info.ID, "💤 *Anti-Delete Disabled!*")
+	default:
+		ReplyText(client, chatID, evt.Info.ID, "❌ Use `on` or `off`")
+	}
 }
 
-func react(client *whatsmeow.Client, chat types.JID, msgID types.MessageID, emoji string) {
-	client.SendMessage(context.Background(), chat, &waProto.Message{
-		ReactionMessage: &waProto.ReactionMessage{
-			Key: &waProto.MessageKey{
-				RemoteJID: proto.String(chat.String()),
-				ID:         proto.String(string(msgID)),
-				FromMe:     proto.Bool(false),
-			},
-			Text:              proto.String(emoji),
-			SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
-		},
-	})
+// ✅ فیچر 3: ANTI-DELETE SYSTEM (وہی ہیوی کارڈ والا)
+func handleAntiDelete(client *whatsmeow.Client, evt *events.MessageRevoke) {
+	key := "msg_cache:" + evt.ID
+	val, err := rdb.Get(ctx, key).Bytes()
+	
+	if err != nil { return } // میسج نہیں ملا
+
+	originalMsg := &waE2E.Message{}
+	proto.Unmarshal(val, originalMsg)
+
+	chatID := evt.Chat.String()
+	botID := getCleanID(client.Store.ID.User)
+	settings := getGroupSettings(botID, chatID)
+	
+	if !settings.Antidelete { return }
+
+	senderJID := evt.Participant
+	if senderJID.IsEmpty() { senderJID = evt.Chat }
+	senderNum := strings.Split(senderJID.User, "@")[0]
+	msgTime := time.Now().Format("03:04 PM")
+
+	// 🎨 HEAVY CARD DESIGN
+	caption := fmt.Sprintf(
+		"█▀▀▀▀▀▀▀▀▀▀▀▀▀█\n"+
+		"█ 🚫 *ANTI-DELETE* █\n"+
+		"█▄▄▄▄▄▄▄▄▄▄▄▄▄█\n"+
+		"┃ 👤 @%s\n"+
+		"┃ 🕒 %s\n"+
+		"┃ 🗑️ *Recovered*\n"+
+		"╰━━━━━━━━━━━━━━⪼",
+		senderNum, msgTime,
+	)
+
+	forwardedMsg := &waE2E.Message{
+		Conversation:        originalMsg.Conversation,
+		ImageMessage:        originalMsg.ImageMessage,
+		VideoMessage:        originalMsg.VideoMessage,
+		AudioMessage:        originalMsg.AudioMessage,
+		ExtendedTextMessage: originalMsg.ExtendedTextMessage,
+		StickerMessage:      originalMsg.StickerMessage,
+	}
+
+	contextInfo := &waE2E.ContextInfo{
+		StanzaId:      proto.String(evt.ID),
+		Participant:   proto.String(senderJID.String()),
+		MentionedJid:  []string{senderJID.String()},
+		IsForwarded:   proto.Bool(true),
+	}
+
+	if forwardedMsg.ImageMessage != nil {
+		forwardedMsg.ImageMessage.Caption = proto.String(caption)
+		forwardedMsg.ImageMessage.ContextInfo = contextInfo
+	} else if forwardedMsg.VideoMessage != nil {
+		forwardedMsg.VideoMessage.Caption = proto.String(caption)
+		forwardedMsg.VideoMessage.ContextInfo = contextInfo
+	} else if forwardedMsg.StickerMessage != nil {
+		ReplyText(client, chatID, evt.ID, caption)
+		forwardedMsg.StickerMessage.ContextInfo = contextInfo
+	} else {
+		finalText := caption + "\n\n💬: " + GetMessageContent(originalMsg)
+		forwardedMsg.Conversation = nil
+		forwardedMsg.ExtendedTextMessage = &waE2E.ExtendedTextMessage{
+			Text:        proto.String(finalText),
+			ContextInfo: contextInfo,
+		}
+	}
+
+	client.SendMessage(context.Background(), evt.Chat, forwardedMsg)
 }
 
-func replyMessage(client *whatsmeow.Client, v *events.Message, text string) {
-	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
-		ExtendedTextMessage: &waProto.ExtendedTextMessage{
-			Text: proto.String(text),
-			ContextInfo: &waProto.ContextInfo{
-				StanzaID:      proto.String(v.Info.ID),
-				Participant:   proto.String(v.Info.Sender.String()),
-				QuotedMessage: v.Message,
-			},
-		},
-	})
+// 🛠️ Helper Functions
+func saveMessageToRedis(evt *events.Message) {
+	if evt.Info.ID == "" || evt.Message == nil { return }
+	msgBytes, _ := proto.Marshal(evt.Message)
+	rdb.Set(ctx, "msg_cache:"+evt.Info.ID, msgBytes, 24*time.Hour)
 }
 
-func sendReplyMessage(client *whatsmeow.Client, v *events.Message, text string) {
-	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
-		ExtendedTextMessage: &waProto.ExtendedTextMessage{
-			Text: proto.String(text),
-			ContextInfo: &waProto.ContextInfo{
-				StanzaID:      proto.String(v.Info.ID),
-				Participant:   proto.String(v.Info.Sender.String()),
-				QuotedMessage: v.Message,
-			},
-		},
-	})
-}
-
-func getText(m *waProto.Message) string {
-	if m.Conversation != nil { return *m.Conversation }
-	if m.ExtendedTextMessage != nil && m.ExtendedTextMessage.Text != nil { return *m.ExtendedTextMessage.Text }
-	if m.ImageMessage != nil && m.ImageMessage.Caption != nil { return *m.ImageMessage.Caption }
-	if m.VideoMessage != nil && m.VideoMessage.Caption != nil { return *m.VideoMessage.Caption }
+func GetMessageContent(msg *waE2E.Message) string {
+	if msg == nil { return "" }
+	if msg.Conversation != nil { return *msg.Conversation }
+	if msg.ExtendedTextMessage != nil { return *msg.ExtendedTextMessage.Text }
+	if msg.ImageMessage != nil { return *msg.ImageMessage.Caption }
+	if msg.VideoMessage != nil { return *msg.VideoMessage.Caption }
 	return ""
-}
-
-func handleSessionDelete(client *whatsmeow.Client, v *events.Message, args []string) {
-	if !isOwner(client, v.Info.Sender) {
-		replyMessage(client, v, "╔═══════════════════╗\n║ 👑 OWNER ONLY      \n╠═══════════════════╣\n║ You don't have    \n║ permission.       \n╚═══════════════════╝")
-		return
-	}
-	if len(args) == 0 {
-		replyMessage(client, v, "⚠️ Please provide a number.")
-		return
-	}
-	targetNumber := args[0]
-	targetJID, ok := parseJID(targetNumber)
-	if !ok {
-		replyMessage(client, v, "❌ Invalid format.")
-		return
-	}
-	clientsMutex.Lock()
-	if targetClient, exists := activeClients[getCleanID(targetNumber)]; exists {
-		targetClient.Disconnect()
-		delete(activeClients, getCleanID(targetNumber))
-	}
-	clientsMutex.Unlock()
-
-	if dbContainer == nil {
-		replyMessage(client, v, "❌ Database error.")
-		return
-	}
-	device, err := dbContainer.GetDevice(context.Background(), targetJID)
-	if err != nil || device == nil {
-		replyMessage(client, v, "❌ Not found.")
-		return
-	}
-	device.Delete(context.Background())
-	msg := fmt.Sprintf("╔═══════════════════╗\n║ 🗑️ SESSION DELETED  \n╠═══════════════════╣\n║ Number: %s\n╚═══════════════════╝", targetNumber)
-	replyMessage(client, v, msg)
-}
-
-func parseJID(arg string) (types.JID, bool) {
-	if arg == "" { return types.EmptyJID, false }
-	if !strings.Contains(arg, "@") { arg += "@s.whatsapp.net" }
-	jid, err := types.ParseJID(arg)
-	if err != nil { return types.EmptyJID, false }
-	return jid, true
 }
