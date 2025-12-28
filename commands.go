@@ -35,26 +35,50 @@ var AuthorizedBots = map[string]bool{
 // ہٹا دیئے گئے ہیں کیونکہ وہ اب صرف main.go میں ایک ہی بار ڈیفائن ہوں گے۔
 
 func handler(botClient *whatsmeow.Client, evt interface{}) {
-	// 🛡️ سیف گارڈ: اگر اس بوٹ میں کوئی ایرر آئے تو یہ پورے سسٹم کو کریش نہیں ہونے دے گا
+	// 🛡️ سیف گارڈ (Panic Recovery)
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("⚠️ [CRASH PREVENTED] Bot %s encountered an error: %v\n", botClient.Store.ID.User, r)
+			fmt.Printf("⚠️ [CRASH PREVENTED] Bot %s: %v\n", botClient.Store.ID.User, r)
 		}
 	}()
 
-	if botClient == nil {
-		return
-	}
-	
+	if botClient == nil { return }
+
 	switch v := evt.(type) {
+	
 	case *events.Message:
-		// ہر میسج کو الگ بیک گراؤنڈ (Goroutine) میں چلائیں
+		// 🚀 1. ٹائم فلٹر (سب سے اہم)
+		// اگر میسج 10 سیکنڈ سے زیادہ پرانا ہے تو اسے اگنور کریں (Backlog Skip)
+		// اس سے بوٹ کبھی "لیٹ" جواب نہیں دے گا، یا تو دے گا یا نہیں دے گا۔
+		msgTime := v.Info.Timestamp
+		if time.Since(msgTime) > 10*time.Second {
+			// پرانے میسجز کو چھوڑ دیں تاکہ بوٹ فریش میسجز پر فوکس کرے
+			return 
+		}
+
+		// 🚫 2. فضول چیٹس اگنور کریں
+		// اسٹیٹس (Stories) اور بوٹ کے اپنے میسجز کو پروسیس نہ کریں
+		if v.Info.IsFromMe || v.Info.Chat.String() == "status@broadcast" {
+			return
+		}
+
+		// ⚡ 3. گوروٹین (بیک گراؤنڈ پروسیس)
+		// اب یہ صرف "تازہ" اور "کام کے" میسجز کے لیے چلے گا
 		go processMessage(botClient, v)
+
+	case *events.Receipt:
+		// 🛑 رسیدیں (Blue Ticks) گروپس میں طوفان لاتی ہیں، انہیں یہاں پکڑ کر ضائع کر دیں
+		return 
+
+	case *events.Presence:
+		// 🛑 ٹائپنگ انڈیکیٹر کو بھی اگنور کریں
+		return
+
 	case *events.GroupInfo:
 		go handleGroupInfoChange(botClient, v)
-	case *events.Connected, *events.LoggedOut:
-		// کنکشن اسٹیٹس لاگ کریں
-		fmt.Printf("ℹ️ [STATUS] Bot %s: %T\n", botClient.Store.ID.User, v)
+
+	case *events.Connected:
+		fmt.Printf("🟢 [ONLINE] Bot %s is ready!\n", botClient.Store.ID.User)
 	}
 }
 
