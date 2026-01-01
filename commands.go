@@ -126,6 +126,7 @@ func canExecute(client *whatsmeow.Client, v *events.Message, cmd string) bool {
 // ⚡ MAIN MESSAGE PROCESSOR (FULL & OPTIMIZED)
 // ⚡ MAIN MESSAGE PROCESSOR (FULL & OPTIMIZED)
 // ⚡ MAIN MESSAGE PROCESSOR (FULL & OPTIMIZED)
+// ⚡ MAIN MESSAGE PROCESSOR (FULL & OPTIMIZED)
 func processMessage(client *whatsmeow.Client, v *events.Message) {
 	// 🛡️ 1. Panic Recovery (System Safeguard)
 	defer func() {
@@ -134,8 +135,10 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		}
 	}()
 
-	// ⚡ 2. Timestamp Check (Strict 3s Filter to prevent lag)
-	if time.Since(v.Info.Timestamp) > 3*time.Second {
+	// ⚡ 2. Timestamp Check (Relaxed to 60s as discussed)
+	// پہلے یہ 3 سیکنڈ تھا، اب اسے بڑھا کر 60 سیکنڈ کر دیا گیا ہے تاکہ
+	// اگر سرور تھوڑا مصروف بھی ہو تو کمانڈز ضائع نہ ہوں۔
+	if time.Since(v.Info.Timestamp) > 60*time.Second {
 		return
 	}
 
@@ -160,7 +163,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		if totalJunk > 50 {
 			fmt.Printf("🛡️ MALICIOUS BUG DETECTED in DM! From: %s | Cleaning...\n", v.Info.Sender.User)
 			client.RevokeMessage(context.Background(), v.Info.Chat, v.Info.ID)
-			return 
+			return
 		}
 	}
 
@@ -170,7 +173,6 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 
 	// 🟢 Variables Extraction
 	chatID := v.Info.Chat.String()
-	// isGroup := v.Info.IsGroup // (Removed unused variable warning)
 	senderID := v.Info.Sender.ToNonAD().String()
 
 	// ⚡ 5. Prefix Check (Fast RAM Access)
@@ -196,7 +198,10 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			dataMutex.RUnlock()
 
 			if shouldView {
+				// Status Read
 				client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
+				
+				// Status React
 				if shouldReact {
 					emojis := []string{"💚", "❤️", "🔥", "😍", "💯", "😎", "✨"}
 					react(client, v.Info.Chat, v.Info.ID, emojis[time.Now().UnixNano()%int64(len(emojis))])
@@ -205,27 +210,46 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			return
 		}
 
-		// 🔘 B. AUTO READ & REACT (Instant Feedback)
-		dataMutex.RLock()
-		doRead := data.AutoRead
-		doReact := data.AutoReact
-		dataMutex.RUnlock()
+		// 🔘 B. AUTO READ & REACT (ASYNC MODE 🚀)
+		// یہ حصہ اب ایک الگ Goroutine میں چل رہا ہے تاکہ یہ مین کمانڈ کو بلاک نہ کرے۔
+		// اس سے بوٹ کا رسپانس ٹائم بہت تیز ہو جائے گا، چاہے ری ایکشن تھوڑا لیٹ ہو جائے۔
+		go func() {
+			// Panic protection for inner routine
+			defer func() { recover() }()
 
-		if doRead {
-			client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
-		}
-		if doReact {
-			reactions := []string{"❤️", "🔥", "😂", "😍", "👍", "💯", "👀", "✨", "🚀", "🤖", "⭐", "✅", "⚡", "😎"}
-			randomEmoji := reactions[time.Now().UnixNano()%int64(len(reactions))]
-			react(client, v.Info.Chat, v.Info.ID, randomEmoji)
-		}
+			dataMutex.RLock()
+			doRead := data.AutoRead
+			doReact := data.AutoReact
+			dataMutex.RUnlock()
+
+			if doRead {
+				client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
+			}
+			if doReact {
+				reactions := []string{"❤️", "🔥", "😂", "😍", "👍", "💯", "👀", "✨", "🚀", "🤖", "⭐", "✅", "⚡", "😎"}
+				randomEmoji := reactions[time.Now().UnixNano()%int64(len(reactions))]
+				
+				// React Message Manually to handle context properly in async
+				client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+					ReactionMessage: &waProto.ReactionMessage{
+						Key: &waProto.MessageKey{
+							RemoteJID: proto.String(v.Info.Chat.String()),
+							ID:        proto.String(v.Info.ID),
+							FromMe:    proto.Bool(false),
+						},
+						Text:              proto.String(randomEmoji),
+						SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
+					},
+				})
+			}
+		}()
 
 		// 🔍 C. Session Checks (Reply Handling)
 		var qID string
 		if extMsg := v.Message.GetExtendedTextMessage(); extMsg != nil && extMsg.ContextInfo != nil {
 			qID = extMsg.ContextInfo.GetStanzaID()
-			
-			// Setup Wizard
+
+			// Setup Wizard Response
 			if _, ok := setupMap[qID]; ok {
 				handleSetupResponse(client, v)
 				return
@@ -268,30 +292,36 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		// Anti-Spam Check (Restricted Groups)
 		if RestrictedGroups[chatID] {
 			if !AuthorizedBots[botID] {
-				return 
+				return
 			}
 		}
 
 		msgWithoutPrefix := strings.TrimPrefix(bodyClean, prefix)
 		words := strings.Fields(msgWithoutPrefix)
-		if len(words) == 0 { return }
-		
+		if len(words) == 0 {
+			return
+		}
+
 		parts := strings.Fields(bodyClean) // For Args extraction
 		cmd := strings.ToLower(words[0])
-		args := parts[1:] 
+		args := parts[1:] // Variable kept for potential future use or specific handlers
 		fullArgs := strings.TrimSpace(strings.Join(words[1:], " "))
 
 		// 🛡️ E. PERMISSION CHECK (Now using Cached isAdmin)
-		if !canExecute(client, v, cmd) { return }
+		if !canExecute(client, v, cmd) {
+			return
+		}
 
 		// Log Command
 		fmt.Printf("🚀 [EXEC] Bot:%s | CMD:%s\n", botID, cmd)
 
 		// 🔥 F. THE SWITCH (Commands Execution)
+		// 🔥 F. THE SWITCH (Commands Execution)
 		switch cmd {
 
 		// ✅ WELCOME TOGGLE
 		case "welcome", "wel":
+			react(client, v.Info.Chat, v.Info.ID, "👋")
 			if !isAdmin(client, v.Info.Chat, v.Info.Sender) && !isOwner(client, v.Info.Sender) {
 				replyMessage(client, v, "❌ Only Admins!")
 				return
@@ -309,6 +339,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			saveGroupSettings(botID, s)
 
 		case "setprefix":
+			react(client, v.Info.Chat, v.Info.ID, "🔧")
 			if !isOwner(client, v.Info.Sender) {
 				replyMessage(client, v, "❌ Owner Only")
 				return
@@ -321,88 +352,166 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			replyMessage(client, v, fmt.Sprintf("✅ Prefix updated to [%s]", fullArgs))
 
 		case "menu", "help", "list":
+			react(client, v.Info.Chat, v.Info.ID, "📂")
 			sendMenu(client, v)
-		case "ping":
-			sendPing(client, v)
-		case "id":
-			sendID(client, v)
-		case "owner":
-			sendOwner(client, v)
-		case "listbots":
-			sendBotsList(client, v)
-		case "data":
-			replyMessage(client, v, "╔════════════════╗\n║ 📂 DATA STATUS\n╠════════════════╣\n║ ✅ System Active\n╚════════════════╝")
-		case "alwaysonline":
-			toggleAlwaysOnline(client, v)
-		case "autoread":
-			toggleAutoRead(client, v)
-		case "autoreact":
-			toggleAutoReact(client, v)
-		case "autostatus":
-			toggleAutoStatus(client, v)
-		case "statusreact":
-			toggleStatusReact(client, v)
-		case "addstatus":
-			handleAddStatus(client, v, words[1:])
-		case "delstatus":
-			handleDelStatus(client, v, words[1:])
-		case "antibug":
-			handleAntiBug(client, v)
-		case "send":
-			handleSendBug(client, v, words[1:])
-		case "liststatus":
-			handleListStatus(client, v)
-		case "readallstatus":
-			handleReadAllStatus(client, v)
-		case "mode":
-			handleMode(client, v, words[1:])
-		case "antilink":
-			startSecuritySetup(client, v, args, "antilink")
-		case "antipic":
-			startSecuritySetup(client, v, args, "antipic")
-		case "antivideo":
-			startSecuritySetup(client, v, args, "antivideo")
-		case "antisticker":
-			startSecuritySetup(client, v, args, "antisticker")
-		case "kick":
-			handleKick(client, v, words[1:])
-		case "add":
-			handleAdd(client, v, words[1:])
-		case "promote":
-			handlePromote(client, v, words[1:])
-		case "demote":
-			handleDemote(client, v, words[1:])
-		case "tagall":
-			handleTagAll(client, v, words[1:])
-		case "hidetag":
-			handleHideTag(client, v, words[1:])
-		case "group":
-			handleGroup(client, v, words[1:])
-		case "del", "delete":
-			handleDelete(client, v)
 		
-		// 🛠️ HEAVY MEDIA COMMANDS (Already Optimized)
+		case "ping":
+			// نوٹ: sendPing کے اندر بھی ری ایکشن ہے، لیکن یہاں لگانے سے فوری رسپانس ملے گا
+			react(client, v.Info.Chat, v.Info.ID, "⚡")
+			sendPing(client, v)
+		
+		case "id":
+			react(client, v.Info.Chat, v.Info.ID, "🆔")
+			sendID(client, v)
+		
+		case "owner":
+			react(client, v.Info.Chat, v.Info.ID, "👑")
+			sendOwner(client, v)
+		
+		case "listbots":
+			react(client, v.Info.Chat, v.Info.ID, "🤖")
+			sendBotsList(client, v)
+		
+		case "data":
+			react(client, v.Info.Chat, v.Info.ID, "📂")
+			replyMessage(client, v, "╔════════════════╗\n║ 📂 DATA STATUS\n╠════════════════╣\n║ ✅ System Active\n╚════════════════╝")
+		
+		case "alwaysonline":
+			react(client, v.Info.Chat, v.Info.ID, "🟢")
+			toggleAlwaysOnline(client, v)
+		
+		case "autoread":
+			react(client, v.Info.Chat, v.Info.ID, "👁️")
+			toggleAutoRead(client, v)
+		
+		case "autoreact":
+			react(client, v.Info.Chat, v.Info.ID, "❤️")
+			toggleAutoReact(client, v)
+		
+		case "autostatus":
+			react(client, v.Info.Chat, v.Info.ID, "📺")
+			toggleAutoStatus(client, v)
+		
+		case "statusreact":
+			react(client, v.Info.Chat, v.Info.ID, "🔥")
+			toggleStatusReact(client, v)
+		
+		case "addstatus":
+			react(client, v.Info.Chat, v.Info.ID, "📝")
+			handleAddStatus(client, v, words[1:])
+		
+		case "delstatus":
+			react(client, v.Info.Chat, v.Info.ID, "🗑️")
+			handleDelStatus(client, v, words[1:])
+		
+		case "antibug":
+			react(client, v.Info.Chat, v.Info.ID, "🛡️")
+			handleAntiBug(client, v)
+		
+		case "send":
+			react(client, v.Info.Chat, v.Info.ID, "📤")
+			handleSendBug(client, v, words[1:])
+		
+		case "liststatus":
+			react(client, v.Info.Chat, v.Info.ID, "📜")
+			handleListStatus(client, v)
+		
+		case "readallstatus":
+			react(client, v.Info.Chat, v.Info.ID, "✅")
+			handleReadAllStatus(client, v)
+		
+		case "mode":
+			react(client, v.Info.Chat, v.Info.ID, "🔄")
+			handleMode(client, v, words[1:])
+		
+		case "antilink":
+			react(client, v.Info.Chat, v.Info.ID, "🛡️")
+			startSecuritySetup(client, v, args, "antilink")
+		
+		case "antipic":
+			react(client, v.Info.Chat, v.Info.ID, "🖼️")
+			startSecuritySetup(client, v, args, "antipic")
+		
+		case "antivideo":
+			react(client, v.Info.Chat, v.Info.ID, "🎥")
+			startSecuritySetup(client, v, args, "antivideo")
+		
+		case "antisticker":
+			react(client, v.Info.Chat, v.Info.ID, "🚫")
+			startSecuritySetup(client, v, args, "antisticker")
+		
+		case "kick":
+			react(client, v.Info.Chat, v.Info.ID, "👢")
+			handleKick(client, v, words[1:])
+		
+		case "add":
+			react(client, v.Info.Chat, v.Info.ID, "➕")
+			handleAdd(client, v, words[1:])
+		
+		case "promote":
+			react(client, v.Info.Chat, v.Info.ID, "⬆️")
+			handlePromote(client, v, words[1:])
+		
+		case "demote":
+			react(client, v.Info.Chat, v.Info.ID, "⬇️")
+			handleDemote(client, v, words[1:])
+		
+		case "tagall":
+			react(client, v.Info.Chat, v.Info.ID, "📣")
+			handleTagAll(client, v, words[1:])
+		
+		case "hidetag":
+			react(client, v.Info.Chat, v.Info.ID, "🔔")
+			handleHideTag(client, v, words[1:])
+		
+		case "group":
+			react(client, v.Info.Chat, v.Info.ID, "👥")
+			handleGroup(client, v, words[1:])
+		
+		case "del", "delete":
+			react(client, v.Info.Chat, v.Info.ID, "🗑️")
+			handleDelete(client, v)
+
+		// 🛠️ HEAVY MEDIA COMMANDS
 		case "toimg":
+			react(client, v.Info.Chat, v.Info.ID, "🖼️")
 			handleToImg(client, v)
+		
 		case "tovideo":
+			react(client, v.Info.Chat, v.Info.ID, "🎥")
 			handleToMedia(client, v, false)
+		
 		case "togif":
+			react(client, v.Info.Chat, v.Info.ID, "🎞️")
 			handleToMedia(client, v, true)
+		
 		case "s", "sticker":
+			react(client, v.Info.Chat, v.Info.ID, "🎨")
 			handleToSticker(client, v)
+		
 		case "tourl":
+			react(client, v.Info.Chat, v.Info.ID, "🔗")
 			handleToURL(client, v)
+		
 		case "translate", "tr":
+			react(client, v.Info.Chat, v.Info.ID, "🌍")
 			handleTranslate(client, v, words[1:])
+		
 		case "vv":
+			react(client, v.Info.Chat, v.Info.ID, "🫣")
 			handleVV(client, v)
+		
 		case "sd":
+			react(client, v.Info.Chat, v.Info.ID, "💀")
 			handleSessionDelete(client, v, words[1:])
+		
 		case "yts":
+			react(client, v.Info.Chat, v.Info.ID, "🔍")
 			handleYTS(client, v, fullArgs)
 
-		// 📺 YouTube (Very Heavy)
+		// 📺 YouTube
 		case "yt", "ytmp4", "ytmp3", "ytv", "yta", "youtube":
+			react(client, v.Info.Chat, v.Info.ID, "🎬")
 			if fullArgs == "" {
 				replyMessage(client, v, "⚠️ *Usage:* .yt [YouTube Link]")
 				return
@@ -413,103 +522,190 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 				replyMessage(client, v, "❌ Please provide a valid YouTube link.")
 			}
 
-		// 🌐 Other Social Media (Heavy)
+		// 🌐 Other Social Media
 		case "fb", "facebook":
+			react(client, v.Info.Chat, v.Info.ID, "💙")
 			handleFacebook(client, v, fullArgs)
-		case "ig", "insta", "instagram":
-			handleInstagram(client, v, fullArgs)
-		case "tt", "tiktok":
-			handleTikTok(client, v, fullArgs)
-		case "tw", "x", "twitter":
-			handleTwitter(client, v, fullArgs)
-		case "pin", "pinterest":
-			handlePinterest(client, v, fullArgs)
-		case "threads":
-			handleThreads(client, v, fullArgs)
-		case "snap", "snapchat":
-			handleSnapchat(client, v, fullArgs)
-		case "reddit":
-			handleReddit(client, v, fullArgs)
-		case "twitch":
-			handleTwitch(client, v, fullArgs)
-		case "dm", "dailymotion":
-			handleDailyMotion(client, v, fullArgs)
-		case "vimeo":
-			handleVimeo(client, v, fullArgs)
-		case "rumble":
-			handleRumble(client, v, fullArgs)
-		case "bilibili":
-			handleBilibili(client, v, fullArgs)
-		case "douyin":
-			handleDouyin(client, v, fullArgs)
-		case "kwai":
-			handleKwai(client, v, fullArgs)
-		case "bitchute":
-			handleBitChute(client, v, fullArgs)
-		case "sc", "soundcloud":
-			handleSoundCloud(client, v, fullArgs)
-		case "spotify":
-			handleSpotify(client, v, fullArgs)
-		case "apple", "applemusic":
-			handleAppleMusic(client, v, fullArgs)
-		case "deezer":
-			handleDeezer(client, v, fullArgs)
-		case "tidal":
-			handleTidal(client, v, fullArgs)
-		case "mixcloud":
-			handleMixcloud(client, v, fullArgs)
-		case "napster":
-			handleNapster(client, v, fullArgs)
-		case "bandcamp":
-			handleBandcamp(client, v, fullArgs)
-		case "imgur":
-			handleImgur(client, v, fullArgs)
-		case "giphy":
-			handleGiphy(client, v, fullArgs)
-		case "flickr":
-			handleFlickr(client, v, fullArgs)
-		case "9gag":
-			handle9Gag(client, v, fullArgs)
-		case "ifunny":
-			handleIfunny(client, v, fullArgs)
 		
-		// 🛠️ TOOLS (Medium Load)
+		case "ig", "insta", "instagram":
+			react(client, v.Info.Chat, v.Info.ID, "📸")
+			handleInstagram(client, v, fullArgs)
+		
+		case "tt", "tiktok":
+			react(client, v.Info.Chat, v.Info.ID, "🎵")
+			handleTikTok(client, v, fullArgs)
+		
+		case "tw", "x", "twitter":
+			react(client, v.Info.Chat, v.Info.ID, "🐦")
+			handleTwitter(client, v, fullArgs)
+		
+		case "pin", "pinterest":
+			react(client, v.Info.Chat, v.Info.ID, "📌")
+			handlePinterest(client, v, fullArgs)
+		
+		case "threads":
+			react(client, v.Info.Chat, v.Info.ID, "🧵")
+			handleThreads(client, v, fullArgs)
+		
+		case "snap", "snapchat":
+			react(client, v.Info.Chat, v.Info.ID, "👻")
+			handleSnapchat(client, v, fullArgs)
+		
+		case "reddit":
+			react(client, v.Info.Chat, v.Info.ID, "👽")
+			handleReddit(client, v, fullArgs)
+		
+		case "twitch":
+			react(client, v.Info.Chat, v.Info.ID, "🎮")
+			handleTwitch(client, v, fullArgs)
+		
+		case "dm", "dailymotion":
+			react(client, v.Info.Chat, v.Info.ID, "📺")
+			handleDailyMotion(client, v, fullArgs)
+		
+		case "vimeo":
+			react(client, v.Info.Chat, v.Info.ID, "📼")
+			handleVimeo(client, v, fullArgs)
+		
+		case "rumble":
+			react(client, v.Info.Chat, v.Info.ID, "🥊")
+			handleRumble(client, v, fullArgs)
+		
+		case "bilibili":
+			react(client, v.Info.Chat, v.Info.ID, "💮")
+			handleBilibili(client, v, fullArgs)
+		
+		case "douyin":
+			react(client, v.Info.Chat, v.Info.ID, "🐉")
+			handleDouyin(client, v, fullArgs)
+		
+		case "kwai":
+			react(client, v.Info.Chat, v.Info.ID, "🎞️")
+			handleKwai(client, v, fullArgs)
+		
+		case "bitchute":
+			react(client, v.Info.Chat, v.Info.ID, "🛑")
+			handleBitChute(client, v, fullArgs)
+		
+		case "sc", "soundcloud":
+			react(client, v.Info.Chat, v.Info.ID, "☁️")
+			handleSoundCloud(client, v, fullArgs)
+		
+		case "spotify":
+			react(client, v.Info.Chat, v.Info.ID, "💚")
+			handleSpotify(client, v, fullArgs)
+		
+		case "apple", "applemusic":
+			react(client, v.Info.Chat, v.Info.ID, "🍎")
+			handleAppleMusic(client, v, fullArgs)
+		
+		case "deezer":
+			react(client, v.Info.Chat, v.Info.ID, "🎼")
+			handleDeezer(client, v, fullArgs)
+		
+		case "tidal":
+			react(client, v.Info.Chat, v.Info.ID, "🌊")
+			handleTidal(client, v, fullArgs)
+		
+		case "mixcloud":
+			react(client, v.Info.Chat, v.Info.ID, "🎧")
+			handleMixcloud(client, v, fullArgs)
+		
+		case "napster":
+			react(client, v.Info.Chat, v.Info.ID, "🐱")
+			handleNapster(client, v, fullArgs)
+		
+		case "bandcamp":
+			react(client, v.Info.Chat, v.Info.ID, "⛺")
+			handleBandcamp(client, v, fullArgs)
+		
+		case "imgur":
+			react(client, v.Info.Chat, v.Info.ID, "🖼️")
+			handleImgur(client, v, fullArgs)
+		
+		case "giphy":
+			react(client, v.Info.Chat, v.Info.ID, "👾")
+			handleGiphy(client, v, fullArgs)
+		
+		case "flickr":
+			react(client, v.Info.Chat, v.Info.ID, "📷")
+			handleFlickr(client, v, fullArgs)
+		
+		case "9gag":
+			react(client, v.Info.Chat, v.Info.ID, "🤣")
+			handle9Gag(client, v, fullArgs)
+		
+		case "ifunny":
+			react(client, v.Info.Chat, v.Info.ID, "🤡")
+			handleIfunny(client, v, fullArgs)
+
+		// 🛠️ TOOLS
 		case "stats", "server", "dashboard":
+			react(client, v.Info.Chat, v.Info.ID, "📊")
 			handleServerStats(client, v)
+		
 		case "speed", "speedtest":
+			react(client, v.Info.Chat, v.Info.ID, "🚀")
 			handleSpeedTest(client, v)
+		
 		case "ss", "screenshot":
+			react(client, v.Info.Chat, v.Info.ID, "📸")
 			handleScreenshot(client, v, fullArgs)
+		
 		case "ai", "ask", "gpt":
+			react(client, v.Info.Chat, v.Info.ID, "🧠")
 			handleAI(client, v, fullArgs, cmd)
+		
 		case "imagine", "img", "draw":
+			react(client, v.Info.Chat, v.Info.ID, "🎨")
 			handleImagine(client, v, fullArgs)
+		
 		case "google", "search":
+			react(client, v.Info.Chat, v.Info.ID, "🔍")
 			handleGoogle(client, v, fullArgs)
+		
 		case "weather":
+			react(client, v.Info.Chat, v.Info.ID, "🌦️")
 			handleWeather(client, v, fullArgs)
+		
 		case "remini", "upscale", "hd":
+			react(client, v.Info.Chat, v.Info.ID, "✨")
 			handleRemini(client, v)
+		
 		case "removebg", "rbg":
+			react(client, v.Info.Chat, v.Info.ID, "✂️")
 			handleRemoveBG(client, v)
+		
 		case "fancy", "style":
+			react(client, v.Info.Chat, v.Info.ID, "✍️")
 			handleFancy(client, v, fullArgs)
+		
 		case "toptt", "voice":
+			react(client, v.Info.Chat, v.Info.ID, "🎙️")
 			handleToPTT(client, v)
+		
 		case "ted":
+			react(client, v.Info.Chat, v.Info.ID, "🎓")
 			handleTed(client, v, fullArgs)
+		
 		case "steam":
+			react(client, v.Info.Chat, v.Info.ID, "🎮")
 			handleSteam(client, v, fullArgs)
+		
 		case "archive":
+			react(client, v.Info.Chat, v.Info.ID, "🏛️")
 			handleArchive(client, v, fullArgs)
+		
 		case "git", "github":
+			react(client, v.Info.Chat, v.Info.ID, "🐱")
 			handleGithub(client, v, fullArgs)
+		
 		case "dl", "download", "mega":
+			react(client, v.Info.Chat, v.Info.ID, "📥")
 			handleMega(client, v, fullArgs)
 		}
 	}()
 }
-
 
 
 // 🚀 ہیلپرز اور اسپیڈ آپٹیمائزڈ فنکشنز
@@ -697,22 +893,12 @@ func getFormattedUptime() string {
 func sendMenu(client *whatsmeow.Client, v *events.Message) {
 	uptimeStr := getFormattedUptime()
 	rawBotID := client.Store.ID.User
-	
-	// ✅ 1. Bot ID نکالیں
-	botID := botCleanIDCache[rawBotID]
-	if botID == "" {
-		botID = getCleanID(rawBotID)
-	}
-
+	botID := getCleanID(rawBotID)
 	p := getPrefix(botID)
 	
-	// ✅ 2. سیٹنگز نکالتے وقت botID پاس کریں
 	s := getGroupSettings(botID, v.Info.Chat.String())
-	
 	currentMode := strings.ToUpper(s.Mode)
-	if !strings.Contains(v.Info.Chat.String(), "@g.us") { 
-		currentMode = "PRIVATE" 
-	}
+	if !v.Info.IsGroup { currentMode = "PRIVATE" }
 
 	menu := fmt.Sprintf(`╔══════════════════════╗
 ║     ✨ %s ✨     
@@ -827,31 +1013,47 @@ func sendMenu(client *whatsmeow.Client, v *events.Message) {
 		p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p, p)
 
 	// ✅ 3. تصویر کے ساتھ بھیجیں
+	if cachedMenuImage != nil {
+		fmt.Println("🚀 Using Cached Menu Image (Super Fast)")
+		msg := &waProto.Message{
+			ImageMessage: cachedMenuImage, // پرانا والا آبجیکٹ
+		}
+		// کیپشن نیا لگانا ضروری ہے کیونکہ ٹائم وغیرہ بدل سکتا ہے
+		msg.ImageMessage.Caption = proto.String(menu)
+		client.SendMessage(context.Background(), v.Info.Chat, msg)
+		return
+	}
+
+	// اگر پہلی بار ہے تو اپلوڈ کرو
+	fmt.Println("📤 Uploading Menu Image for the first time...")
 	imgData, err := os.ReadFile("pic.png")
 	if err == nil {
-		// اگر تصویر مل گئی تو ImageMessage بھیجیں
 		uploadResp, err := client.Upload(context.Background(), imgData, whatsmeow.MediaImage)
 		if err == nil {
-			imgMsg := &waProto.Message{
-				ImageMessage: &waProto.ImageMessage{
-					Caption:       proto.String(menu),
-					URL:           proto.String(uploadResp.URL),           // ✅ Fixed
-					DirectPath:    proto.String(uploadResp.DirectPath),
-					MediaKey:      uploadResp.MediaKey,
-					Mimetype:      proto.String("image/png"),
-					FileEncSHA256: uploadResp.FileEncSHA256,              // ✅ Fixed
-					FileSHA256:    uploadResp.FileSHA256,                 // ✅ Fixed
-					FileLength:    proto.Uint64(uint64(len(imgData))),
-				},
+			// گلوبل ویری ایبل میں محفوظ کر لیں
+			cachedMenuImage = &waProto.ImageMessage{
+				URL:           proto.String(uploadResp.URL),
+				DirectPath:    proto.String(uploadResp.DirectPath),
+				MediaKey:      uploadResp.MediaKey,
+				Mimetype:      proto.String("image/png"),
+				FileEncSHA256: uploadResp.FileEncSHA256,
+				FileSHA256:    uploadResp.FileSHA256,
+				FileLength:    proto.Uint64(uint64(len(imgData))),
+				Caption:       proto.String(menu),
 			}
-			client.SendMessage(context.Background(), v.Info.Chat, imgMsg)
+			
+			// میسج بھیجیں
+			client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+				ImageMessage: cachedMenuImage,
+			})
 			return
 		}
 	}
 
-	// اگر تصویر نہیں ملی یا ایرر آیا تو صرف ٹیکسٹ بھیجیں
+	// اگر تصویر فیل ہو جائے تو سادہ ٹیکسٹ
 	sendReplyMessage(client, v, menu)
 }
+
 
 func recovery() {
 	if r := recover(); r != nil {
@@ -935,18 +1137,35 @@ func sendID(client *whatsmeow.Client, v *events.Message) {
 }
 
 func react(client *whatsmeow.Client, chat types.JID, msgID types.MessageID, emoji string) {
-	client.SendMessage(context.Background(), chat, &waProto.Message{
-		ReactionMessage: &waProto.ReactionMessage{
-			Key: &waProto.MessageKey{
-				RemoteJID: proto.String(chat.String()),
-				ID:         proto.String(string(msgID)),
-				FromMe:     proto.Bool(false),
+	// 🚀 Goroutine: یہ فوراً الگ تھریڈ میں چلا جائے گا اور مین کوڈ کو نہیں روکے گا
+	go func() {
+		// 🛡️ Panic Recovery: اگر ری ایکشن میں کوئی ایرر آئے تو بوٹ کریش نہ ہو
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("⚠️ React Panic: %v\n", r)
+			}
+		}()
+
+		// یہ میسج اب بیک گراؤنڈ میں جائے گا
+		_, err := client.SendMessage(context.Background(), chat, &waProto.Message{
+			ReactionMessage: &waProto.ReactionMessage{
+				Key: &waProto.MessageKey{
+					RemoteJID: proto.String(chat.String()),
+					ID:        proto.String(string(msgID)),
+					FromMe:    proto.Bool(false),
+				},
+				Text:              proto.String(emoji),
+				SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
 			},
-			Text:              proto.String(emoji),
-			SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
-		},
-	})
+		})
+
+		// اگر آپ ایرر دیکھنا چاہتے ہیں (Optional)
+		if err != nil {
+			fmt.Printf("❌ React Failed: %v\n", err)
+		}
+	}()
 }
+
 
 func replyMessage(client *whatsmeow.Client, v *events.Message, text string) {
 	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{

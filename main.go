@@ -45,6 +45,8 @@ var (
 	globalClient    *whatsmeow.Client
 	ytCache         = make(map[string]YTSession)
 	ytDownloadCache = make(map[string]YTState)
+    cachedMenuImage *waProto.ImageMessage
+
 )
 
 // ✅ 1. ریڈیس کنکشن
