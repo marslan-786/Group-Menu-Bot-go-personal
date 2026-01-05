@@ -54,7 +54,7 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 		// چیک کریں کہ میسج کتنی دیر پہلے آیا تھا
 		msgAge := time.Since(v.Info.Timestamp).Seconds()
 
-		if msgAge > 3.0 {
+		if msgAge > 60.0 {
 			// اگر میسج 3 سیکنڈ سے زیادہ پرانا ہے تو اسے فوراً چھوڑ دیں
 			// fmt.Printf("🗑️ [IGNORED] Old message: %.1fs ago\n", msgAge)
 			return
@@ -124,9 +124,6 @@ func canExecute(client *whatsmeow.Client, v *events.Message, cmd string) bool {
 }
 
 // ⚡ MAIN MESSAGE PROCESSOR (FULL & OPTIMIZED)
-// ⚡ MAIN MESSAGE PROCESSOR (FULL & OPTIMIZED)
-// ⚡ MAIN MESSAGE PROCESSOR (FULL & OPTIMIZED)
-// ⚡ MAIN MESSAGE PROCESSOR (FULL & OPTIMIZED)
 func processMessage(client *whatsmeow.Client, v *events.Message) {
 	// 🛡️ 1. Panic Recovery (System Safeguard)
 	defer func() {
@@ -177,9 +174,13 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	prefix := getPrefix(botID)
 	isCommand := strings.HasPrefix(bodyClean, prefix)
 
-	// =========================================================================
-	// 🚀 GOROUTINE START (سب کچھ اب بیک گراؤنڈ میں چلے گا)
-	// =========================================================================
+	// 🔥 GLOBAL SETTINGS PRE-FETCH (RAM ACCESS)
+	// یہ ہم نے باہر نکال لیا تاکہ Goroutine کے اندر بار بار Mutex Lock نہ لگانا پڑے
+	dataMutex.RLock()
+	doRead := data.AutoRead
+	doReact := data.AutoReact
+	dataMutex.RUnlock()
+
 	// =========================================================================
 	// 🚀 GOROUTINE START (سب کچھ اب بیک گراؤنڈ میں چلے گا)
 	// =========================================================================
@@ -209,47 +210,45 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		}
 
 		// 🔘 B. AUTO READ & REACT (SMART OPTIMIZED MODE 🚀)
-		go func() {
-			defer func() { recover() }()
-			dataMutex.RLock()
-			doRead := data.AutoRead
-			doReact := data.AutoReact
-			dataMutex.RUnlock()
+		// ⚡ OPTIMIZATION: اگر بٹن OFF ہے تو کوڈ کا یہ حصہ چلے گا ہی نہیں۔
+		if doRead || doReact {
+			go func() {
+				defer func() { recover() }()
 
-			// ⚡ FIX: گروپ میں سپیم روکنے کے لیے صرف تب ریڈ/ری ایکٹ کریں جب ضروری ہو
-			isPrivate := !v.Info.IsGroup
-			
-			// Auto Read Logic
-			if doRead {
-				client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
-			}
-			
-			// Auto React Logic (Private Only or Mentioned in Group to avoid lag)
-			if doReact {
-				shouldReact := isPrivate // پرائیویٹ میں ہمیشہ کرو
+				// ⚡ FIX: اگر AutoRead آن بھی ہے، تب بھی گروپ کے فضول میسجز کو اگنور کریں
+				// صرف پرائیویٹ چیٹ یا کمانڈز کو Read مارک کریں۔ ساکٹ بچائیں۔
+				if doRead {
+					if !v.Info.IsGroup || isCommand {
+						client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
+					}
+				}
 				
-				// اگر گروپ ہے تو صرف 10% میسجز پر کرو یا اگر مینشن ہو (تاکہ واٹس ایپ بلاک نہ کرے)
-				if v.Info.IsGroup && (strings.Contains(bodyClean, "@"+botID) || time.Now().Unix()%10 == 0) {
-					shouldReact = true
-				}
+				// Auto React Logic
+				if doReact {
+					shouldReact := !v.Info.IsGroup // پرائیویٹ میں ہمیشہ
+					// گروپ میں صرف تب جب مینشن ہو یا کمانڈ ہو (ہر میسج پر نہیں)
+					if v.Info.IsGroup && (strings.Contains(bodyClean, "@"+botID) || isCommand) {
+						shouldReact = true
+					}
 
-				if shouldReact {
-					reactions := []string{"❤️", "🔥", "😂", "😍", "👍", "💯", "👀", "✨", "🚀", "🤖", "⭐", "✅", "⚡", "😎"}
-					randomEmoji := reactions[time.Now().UnixNano()%int64(len(reactions))]
-					client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
-						ReactionMessage: &waProto.ReactionMessage{
-							Key: &waProto.MessageKey{
-								RemoteJID: proto.String(v.Info.Chat.String()),
-								ID:        proto.String(v.Info.ID),
-								FromMe:    proto.Bool(false),
+					if shouldReact {
+						reactions := []string{"❤️", "🔥", "😂", "😍", "👍", "💯", "👀", "✨", "🚀", "🤖", "⭐", "✅", "⚡", "😎"}
+						randomEmoji := reactions[time.Now().UnixNano()%int64(len(reactions))]
+						client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+							ReactionMessage: &waProto.ReactionMessage{
+								Key: &waProto.MessageKey{
+									RemoteJID: proto.String(v.Info.Chat.String()),
+									ID:        proto.String(v.Info.ID),
+									FromMe:    proto.Bool(false),
+								},
+								Text:              proto.String(randomEmoji),
+								SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
 							},
-							Text:              proto.String(randomEmoji),
-							SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
-						},
-					})
+						})
+					}
 				}
-			}
-		}()
+			}()
+		}
 
 		// 🔍 C. Session Checks (Reply Handling)
 		extMsg := v.Message.GetExtendedTextMessage()
@@ -294,77 +293,73 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			}
 		}
 
-		// ⚡ D. COMMAND PARSING & SECURITY (EAGLE EYE 🦅)
-		if !isCommand {
-			if v.Info.IsGroup {
-				// 🔥🔥🔥 [EAGLE EYE SECURITY CHECK] 🔥🔥🔥
-				hasLink := false
-				bodyLower := strings.ToLower(bodyClean)
+		// ⚡ D. SECURITY CHECKS (OPTIMIZED - LOCAL CHECK FIRST)
+		if !isCommand && v.Info.IsGroup {
+			
+			// 🧠 STEP 1: FAST LOCAL CHECK (RAM ONLY)
+			// اگر میسج میں لنک یا میڈیا ہے ہی نہیں، تو Database یا Redis کو کال کرنے کی ضرورت نہیں۔
+			hasLink := false
+			bodyLower := strings.ToLower(bodyClean)
+			
+			quickCheck := []string{
+				"http", "www.", "wa.me", "t.me", "bit.ly", "goo.gl", 
+				"tinyurl", "youtu.be", "chat.whatsapp.com", 
+				".com", ".net", ".org", ".info", ".biz", ".xyz", 
+				".top", ".site", ".pro", ".club", ".io", ".ai", 
+				".co", ".pk", ".in", ".us", ".me", ".tk", ".ml", ".ga",
+			}
 
-				// 1. Known Protocols & Shorteners
-				quickCheck := []string{
-					"http", "www.", "wa.me", "t.me", "bit.ly", "goo.gl", 
-					"tinyurl", "youtu.be", "chat.whatsapp.com", 
-					".com", ".net", ".org", ".info", ".biz", ".xyz", 
-					".top", ".site", ".pro", ".club", ".io", ".ai", 
-					".co", ".pk", ".in", ".us", ".me", ".tk", ".ml", ".ga",
-				}
-
-				for _, key := range quickCheck {
-					if strings.Contains(bodyLower, key) {
-						hasLink = true
-						break
-					}
-				}
-
-				// 2. "The Smart Eye" (For custom domains without http)
-				if !hasLink {
-					words := strings.Fields(bodyClean)
-					for _, w := range words {
-						w = strings.Trim(w, "()[]{},;\"'*")
-						if idx := strings.Index(w, "."); idx > 0 && idx < len(w)-1 {
-							parts := strings.Split(w, ".")
-							lastPart := parts[len(parts)-1]
-							
-							isAlpha := true
-							for _, c := range lastPart {
-								if c < 'a' || c > 'z' {
-									isAlpha = false
-									break
-								}
-							}
-							if len(lastPart) >= 2 && isAlpha {
-								hasLink = true
-								break
-							}
-						}
-					}
-				}
-
-				// 3. Media Check
-				isImage := v.Message.ImageMessage != nil
-				isVideo := v.Message.VideoMessage != nil
-				isSticker := v.Message.StickerMessage != nil
-
-				// 🚀 RAM Optimization: If safe, return immediately
-				if !hasLink && !isImage && !isVideo && !isSticker {
-					return
-				}
-
-				// 4. Check Database Settings ONLY if needed
-				s := getGroupSettings(botID, chatID)
-				shouldCheck := false
-				
-				if hasLink && s.Antilink { shouldCheck = true }
-				if isImage && s.AntiPic { shouldCheck = true }
-				if isVideo && s.AntiVideo { shouldCheck = true }
-				if isSticker && s.AntiSticker { shouldCheck = true }
-
-				if shouldCheck {
-					checkSecurity(client, v)
+			for _, key := range quickCheck {
+				if strings.Contains(bodyLower, key) {
+					hasLink = true
+					break
 				}
 			}
-			return
+
+			// 2. "The Smart Eye" (For custom domains without http)
+			if !hasLink {
+				words := strings.Fields(bodyClean)
+				for _, w := range words {
+					w = strings.Trim(w, "()[]{},;\"'*")
+					if idx := strings.Index(w, "."); idx > 0 && idx < len(w)-1 {
+						parts := strings.Split(w, ".")
+						lastPart := parts[len(parts)-1]
+						isAlpha := true
+						for _, c := range lastPart {
+							if c < 'a' || c > 'z' { isAlpha = false; break }
+						}
+						if len(lastPart) >= 2 && isAlpha { hasLink = true; break }
+					}
+				}
+			}
+
+			// 3. Media Check
+			isImage := v.Message.ImageMessage != nil
+			isVideo := v.Message.VideoMessage != nil
+			isSticker := v.Message.StickerMessage != nil
+
+			// 🛑 FAST RETURN: اگر میسج صاف ہے تو یہیں سے واپس جاؤ۔ سیٹنگ مت منگواؤ۔
+			if !hasLink && !isImage && !isVideo && !isSticker {
+				return
+			}
+
+			// 🧠 STEP 2: FETCH SETTINGS (اب منگواؤ کیونکہ شک پکا ہو گیا ہے)
+			s := getGroupSettings(botID, chatID)
+			
+			// اگر پرائیویٹ موڈ ہے تو کچھ نہ کریں۔
+			if s.Mode == "private" { return }
+
+			shouldCheck := false
+			if hasLink && s.Antilink { shouldCheck = true }
+			if isImage && s.AntiPic { shouldCheck = true }
+			if isVideo && s.AntiVideo { shouldCheck = true }
+			if isSticker && s.AntiSticker { shouldCheck = true }
+
+			if shouldCheck {
+				checkSecurity(client, v)
+				// سیکیورٹی چیک ہو گیا، اب فنکشن ختم۔
+				return 
+			}
 		}
 
 		// Anti-Spam Check (Restricted Groups)
@@ -372,6 +367,16 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			if !AuthorizedBots[botID] {
 				return
 			}
+		}
+
+		// =========================================================
+		// 🚀 E. COMMAND HANDLING (Final Step)
+		// =========================================================
+		// اگر یہ کمانڈ نہیں ہے، تو اوپر والے چیکس سے گزر کر یہاں تک پہنچے گا ہی نہیں (اگر سیکیورٹی ٹرگر نہ ہو)
+		// لیکن اگر `isCommand` true ہے تو یہ سیدھا یہاں آئے گا۔
+		
+		if !isCommand {
+			return
 		}
 
 		// Command Argument Extraction
@@ -395,6 +400,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		fmt.Printf("🚀 [EXEC] Bot:%s | CMD:%s\n", botID, cmd)
 
 		// 🔥 F. THE SWITCH (Commands Execution)
+
 
 		switch cmd {
 
@@ -873,10 +879,14 @@ func isAdmin(client *whatsmeow.Client, chat, user types.JID) bool {
 		return cache.Admins[userClean]
 	}
 
-	// 2. اگر کیشے نہیں ہے تو واٹس ایپ سے پوچھیں (Slow but necessary once)
-	info, err := client.GetGroupInfo(context.Background(), chat)
+	// ⚡ FIX: یہاں ہم نے ٹائم آؤٹ لگایا ہے (صرف 10 سیکنڈ انتظار کرے گا)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	info, err := client.GetGroupInfo(ctx, chat)
 	if err != nil {
-		return false
+		fmt.Println("⚠️ Admin check timed out or failed:", err)
+		return false // اگر فیل ہو جائے تو سیفٹی کے لیے false
 	}
 
 	// 3. نئی لسٹ بنائیں
@@ -888,16 +898,17 @@ func isAdmin(client *whatsmeow.Client, chat, user types.JID) bool {
 		}
 	}
 
-	// 4. کیشے میں محفوظ کریں (5 منٹ کے لیے)
+	// 4. کیشے میں محفوظ کریں (ٹائم بڑھا کر 24 گھنٹے کر دیں تاکہ بار بار چیک نہ کرے)
 	adminMutex.Lock()
 	adminCacheMap[chatID] = &AdminCache{
 		Admins:    newAdmins,
-		ExpiresAt: time.Now().Add(300 * time.Minute),
+		ExpiresAt: time.Now().Add(24 * time.Hour), // 5 گھنٹے سے بڑھا کر 24 گھنٹے کر دیا
 	}
 	adminMutex.Unlock()
 
 	return newAdmins[userClean]
 }
+
 
 
 func sendOwner(client *whatsmeow.Client, v *events.Message) {

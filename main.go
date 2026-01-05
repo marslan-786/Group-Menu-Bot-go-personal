@@ -545,6 +545,80 @@ func StartAllBots(container *sqlstore.Container) {
 	go monitorNewSessions(container)
 }
 
+// ✅ یہ فنکشن مین (main) کے اندر StartAllBots کے بعد کال کریں
+func PreloadAllGroupSettings() {
+    if rdb == nil { return }
+    
+    fmt.Println("🚀 [RAM] Preloading all group settings into Memory...")
+    
+    // Redis سے تمام سیٹنگز کی Keys منگوائیں
+    keys, err := rdb.Keys(ctx, "group_settings:*").Result()
+    if err != nil {
+        fmt.Println("⚠️ [RAM] Failed to fetch keys:", err)
+        return
+    }
+
+    count := 0
+    for _, key := range keys {
+        val, err := rdb.Get(ctx, key).Result()
+        if err == nil {
+            var s GroupSettings
+            if json.Unmarshal([]byte(val), &s) == nil {
+                // Key سے botID اور chatID الگ کریں
+                // Key format: "group_settings:923xx:1203xx@g.us"
+                parts := strings.Split(key, ":")
+                if len(parts) >= 3 {
+                    // uniqueKey = "923xx:1203xx@g.us"
+                    uniqueKey := parts[1] + ":" + parts[2]
+                    
+                    // 💾 سیدھا RAM میں سٹور کریں
+                    cacheMutex.Lock()
+                    groupCache[uniqueKey] = &s
+                    cacheMutex.Unlock()
+                    count++
+                }
+            }
+        }
+    }
+    fmt.Printf("✅ [RAM] Successfully loaded settings for %d groups!\n", count)
+}
+
+// ⚡ آپٹییمائزڈ گیٹر (صرف RAM استعمال کرے گا)
+func getGroupSettings(botID, chatID string) *GroupSettings {
+    uniqueKey := botID + ":" + chatID
+
+    // 1. سب سے پہلے RAM چیک کریں (0ms Latency)
+    cacheMutex.RLock()
+    s, exists := groupCache[uniqueKey]
+    cacheMutex.RUnlock()
+
+    if exists {
+        return s
+    }
+
+    // 2. اگر RAM میں نہیں ہے (شاید نیا گروپ ہے)، تب Redis چیک کریں
+    // (یہ بہت کم ہوگا کیونکہ ہم نے Preload کر لیا ہے)
+    if rdb != nil {
+        redisKey := "group_settings:" + uniqueKey
+        val, err := rdb.Get(ctx, redisKey).Result()
+        if err == nil {
+            var loadedSettings GroupSettings
+            if json.Unmarshal([]byte(val), &loadedSettings) == nil {
+                cacheMutex.Lock()
+                groupCache[uniqueKey] = &loadedSettings
+                cacheMutex.Unlock()
+                return &loadedSettings
+            }
+        }
+    }
+
+    // 3. ڈیفالٹ
+    return &GroupSettings{
+        ChatID: chatID, Mode: "public", Antilink: false, 
+        AntilinkAdmin: true, AntilinkAction: "delete", Welcome: false,
+    }
+}
+
 func loadPersistentUptime() {
 	if rdb != nil {
 		val, err := rdb.Get(ctx, "total_uptime").Int64()
@@ -572,53 +646,6 @@ func SetGlobalClient(c *whatsmeow.Client) {
 }
 
 // ⚡ سیٹنگز حاصل کرنے کا فنکشن (اب بوٹ آئی ڈی بھی مانگے گا)
-func getGroupSettings(botID, chatID string) *GroupSettings {
-	// یونیک کی بنائیں (تاکہ ہر بوٹ کا ڈیٹا الگ رہے)
-	// Key Format: "923001234567:1203630...@g.us"
-	uniqueKey := botID + ":" + chatID
-
-	// 1. پہلے میموری (RAM) چیک کریں
-	cacheMutex.RLock()
-	s, exists := groupCache[uniqueKey]
-	cacheMutex.RUnlock()
-
-	if exists {
-		return s
-	}
-
-	// 2. اگر میموری میں نہیں ہے، تو Redis چیک کریں
-	if rdb != nil {
-		// Redis Key: "group_settings:92300...:12036..."
-		redisKey := "group_settings:" + uniqueKey
-		val, err := rdb.Get(ctx, redisKey).Result()
-		
-		if err == nil {
-			var loadedSettings GroupSettings
-			err := json.Unmarshal([]byte(val), &loadedSettings)
-			if err == nil {
-				// میموری میں اپڈیٹ کریں (Composite Key کے ساتھ)
-				cacheMutex.Lock()
-				groupCache[uniqueKey] = &loadedSettings
-				cacheMutex.Unlock()
-				
-				return &loadedSettings
-			}
-		}
-	}
-
-	// 3. اگر کہیں نہیں ہے تو ڈیفالٹ بنائیں
-	newSettings := &GroupSettings{
-		ChatID:         chatID,
-		Mode:           "public", 
-		Antilink:       false,
-		AntilinkAdmin:  true,     
-		AntilinkAction: "delete", 
-		Welcome:        false,
-		Warnings:       make(map[string]int),
-	}
-
-	return newSettings
-}
 
 // ⚡ سیٹنگز محفوظ کرنے کا فنکشن (بوٹ آئی ڈی کے ساتھ)
 func saveGroupSettings(botID string, s *GroupSettings) {
