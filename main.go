@@ -96,7 +96,7 @@ func main() {
 	loadPersistentUptime()
 	loadGlobalSettings() // ✅ سیٹنگز لوڈ کریں
 	startPersistentUptimeTracker()
-
+    SetupFeatures()
 	// 2. ڈیٹا بیس کنکشن (صرف Postgres)
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {

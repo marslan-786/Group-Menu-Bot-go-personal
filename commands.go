@@ -42,6 +42,8 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 			fmt.Printf("⚠️ [CRASH PREVENTED] Bot %s error: %v\n", botClient.Store.ID.User, r)
 		}
 	}()
+	
+	ListenForFeatures(botClient, evt)
 
 	if botClient == nil {
 		return
@@ -641,7 +643,26 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		case "reddit":
 			react(client, v.Info.Chat, v.Info.ID, "👽")
 			handleReddit(client, v, fullArgs)
-		
+		// ... switch cmd { کے اندر
+
+        // ... switch cmd { کے اندر ...
+
+        case "status":
+            react(client, v.Info.Chat, v.Info.ID, "💾")
+            // args میں [copy, 92300...] ہوگا
+            HandleStatusCmd(client, v, args)
+
+        case "antidelete":
+            react(client, v.Info.Chat, v.Info.ID, "🛡️")
+            
+            // ✅ Owner Check (آپ کا اپنا فنکشن استعمال ہو رہا ہے)
+            if !isOwner(client, v.Info.Sender) {
+                replyMessage(client, v, "❌ Only Owner Command!")
+                return 
+            }
+            
+            // args میں [on/off/set] ہوگا
+            HandleAntiDeleteCommand(client, v, args)
 		case "twitch":
 			react(client, v.Info.Chat, v.Info.ID, "🎮")
 			handleTwitch(client, v, fullArgs)
