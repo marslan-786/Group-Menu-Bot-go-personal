@@ -14,78 +14,91 @@ import (
 
 // 🎛️ MAIN SWITCH HANDLER
 func HandleButtonCommands(client *whatsmeow.Client, evt *events.Message) {
-	// میسج کا ٹیکسٹ حاصل کریں
 	text := evt.Message.GetConversation()
 	if text == "" {
 		text = evt.Message.GetExtendedTextMessage().GetText()
 	}
 
-	// کمانڈ چیک کریں
 	if !strings.HasPrefix(strings.ToLower(text), ".btn") {
 		return
 	}
 
 	cmd := strings.TrimSpace(strings.ToLower(text))
 
-	switch cmd {
-	case ".btn 1":
-		// 🔥 COPY CODE BUTTON
+	// 🛠️ SCENARIO 1: COPY CODE
+	if cmd == ".btn 1" {
 		fmt.Println("Sending Copy Button...")
+		
+		// ✅ Correct Map Syntax (Key: Value)
 		params := map[string]string{
-			"display_text": "👉 Copy Code",
+			"display_text": "👉 Copy OTP",
 			"copy_code":    "IMPOSSIBLE-2026",
+			"id":           "btn_copy_123",
 		}
-		// نوٹ: ہم 'evt' پاس کر رہے ہیں تاکہ اس کا رپلائی دیا جا سکے
-		sendNativeFlow(client, evt, "🔥 *Copy Button*", "نیچے بٹن دبا کر کوڈ کاپی کریں۔", "cta_copy", params)
+		
+		sendNativeFlow(client, evt, "🔥 *Copy Code*", "نیچے بٹن دبا کر کوڈ کاپی کریں۔", "cta_copy", params)
+	}
 
-	case ".btn 2":
-		// 🌍 URL BUTTON
+	// 🛠️ SCENARIO 2: OPEN URL
+	if cmd == ".btn 2" {
 		fmt.Println("Sending URL Button...")
+		
 		params := map[string]string{
 			"display_text": "🌐 Open Google",
 			"url":          "https://google.com",
 			"merchant_url": "https://google.com",
+			"id":           "btn_url_456",
 		}
+		
 		sendNativeFlow(client, evt, "🌍 *URL Access*", "ہماری ویب سائٹ وزٹ کریں۔", "cta_url", params)
+	}
 
-	case ".btn 3":
-		// 📜 LIST MENU
+	// 🛠️ SCENARIO 3: LIST MENU
+	if cmd == ".btn 3" {
 		fmt.Println("Sending List Menu...")
+		
+		// ✅ Complex Nested Map Syntax Fixed
 		listParams := map[string]interface{}{
 			"title": "✨ Select Option",
 			"sections": []map[string]interface{}{
 				{
 					"title": "Main Features",
 					"rows": []map[string]string{
-						{"header": "🤖", "title": "AI Chat", "description": "Chat with Gemini", "id": "row_ai"},
-						{"header": "📥", "title": "Downloader", "description": "Save Videos", "id": "row_dl"},
+						{
+							"header":      "🤖",
+							"title":       "AI Chat",
+							"description": "Chat with Gemini",
+							"id":          "row_ai",
+						},
+						{
+							"header":      "📥",
+							"title":       "Downloader",
+							"description": "Save Videos",
+							"id":          "row_dl",
+						},
 					},
 				},
 			},
 		}
 		sendNativeFlow(client, evt, "📂 *Main Menu*", "نیچے مینیو کھولیں۔", "single_select", listParams)
-
-	default:
-		// عام مینیو
-		client.SendMessage(context.Background(), evt.Info.Chat, &waE2E.Message{
-			Conversation: proto.String("🛠️ *Try commands:* .btn 1, .btn 2, .btn 3"),
-		})
 	}
 }
 
 // ---------------------------------------------------------
-// 👇 HELPER FUNCTION (THE MAGIC FIX)
+// 👇 HELPER FUNCTION (DEEP SEARCH COMPLIANT)
 // ---------------------------------------------------------
 
 func sendNativeFlow(client *whatsmeow.Client, evt *events.Message, title string, body string, btnName string, params interface{}) {
-	// 1. JSON Marshal
+	
+	// 1. Serialize Params to JSON String
 	jsonBytes, err := json.Marshal(params)
 	if err != nil {
-		fmt.Println("JSON Error:", err)
+		fmt.Printf("❌ JSON Error: %v\n", err)
 		return
 	}
 
-	// 2. Button Structure
+	// 2. Construct Buttons Slice
+	// 🚨 IMPORTANT: Using Named Fields to avoid "implicit assignment" errors
 	buttons := []*waE2E.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
 		{
 			Name:             proto.String(btnName),
@@ -93,47 +106,51 @@ func sendNativeFlow(client *whatsmeow.Client, evt *events.Message, title string,
 		},
 	}
 
-	// 3. Message Structure (With ContextInfo & FutureProof)
-	msg := &waE2E.Message{
+	// 3. Construct Native Flow Message
+	nativeFlowMsg := &waE2E.InteractiveMessage_NativeFlowMessage{
+		Buttons:           buttons,
+		MessageParamsJSON: proto.String("{}"), // Mandatory empty JSON for some clients
+		MessageVersion:    proto.Int32(3),     // Version 3 is critical for 2025/26
+	}
+
+	// 4. Construct Interactive Message
+	interactiveMsg := &waE2E.InteractiveMessage{
+		Header: &waE2E.InteractiveMessage_Header{
+			Title:              proto.String(title),
+			HasMediaAttachment: proto.Bool(false),
+		},
+		Body: &waE2E.InteractiveMessage_Body{
+			Text: proto.String(body),
+		},
+		Footer: &waE2E.InteractiveMessage_Footer{
+			Text: proto.String("🤖 Impossible Bot Beta"),
+		},
+		// Wrapper for OneOf Field
+		InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
+			NativeFlowMessage: nativeFlowMsg,
+		},
+		// 🔥 Context Info (Forcing Render via Reply)
+		ContextInfo: &waE2E.ContextInfo{
+			StanzaID:      proto.String(evt.Info.ID),
+			Participant:   proto.String(evt.Info.Sender.String()),
+			QuotedMessage: evt.Message,
+		},
+	}
+
+	// 5. Wrap in FutureProofMessage (The ViewOnce Hack)
+	finalMsg := &waE2E.Message{
 		ViewOnceMessage: &waE2E.FutureProofMessage{
 			Message: &waE2E.Message{
-				InteractiveMessage: &waE2E.InteractiveMessage{
-					Header: &waE2E.InteractiveMessage_Header{
-						Title:              proto.String(title),
-						HasMediaAttachment: proto.Bool(false),
-					},
-					Body: &waE2E.InteractiveMessage_Body{
-						Text: proto.String(body),
-					},
-					Footer: &waE2E.InteractiveMessage_Footer{
-						Text: proto.String("🤖 Impossible Bot"),
-					},
-					
-					// ✅ Native Flow Wrapper
-					InteractiveMessage: &waE2E.InteractiveMessage_NativeFlowMessage_{
-						NativeFlowMessage: &waE2E.InteractiveMessage_NativeFlowMessage{
-							Buttons:        buttons,
-							MessageVersion: proto.Int32(3),
-						},
-					},
-
-					// 🔥 FORCE RENDER TRICK (ContextInfo)
-					// یہ سب سے اہم لائنز ہیں۔ یہ میسج کو رپلائی بنا دیتی ہیں جس سے بٹن شو ہو جاتے ہیں۔
-					ContextInfo: &waE2E.ContextInfo{
-						StanzaID:      proto.String(evt.Info.ID),
-						Participant:   proto.String(evt.Info.Sender.String()),
-						QuotedMessage: evt.Message,
-					},
-				},
+				InteractiveMessage: interactiveMsg,
 			},
 		},
 	}
 
-	// 4. Send Message
-	_, err = client.SendMessage(context.Background(), evt.Info.Chat, msg)
+	// 6. Send
+	_, err = client.SendMessage(context.Background(), evt.Info.Chat, finalMsg)
 	if err != nil {
-		fmt.Println("❌ Error sending buttons:", err)
+		fmt.Printf("❌ Error sending buttons: %v\n", err)
 	} else {
-		fmt.Println("✅ Buttons sent successfully!")
+		fmt.Println("✅ Button Sent Successfully!")
 	}
 }
