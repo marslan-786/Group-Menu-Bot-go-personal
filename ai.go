@@ -71,7 +71,7 @@ func handleAIReply(client *whatsmeow.Client, v *events.Message) bool {
 
 // ⚙️ INTERNAL LOGIC (Common for Command & Reply)
 func processAIConversation(client *whatsmeow.Client, v *events.Message, query string, cmd string, isReply bool) {
-	// اگر یہ رپلائی نہیں ہے تو ری ایکٹ کریں
+	// اگر یہ رپلائی نہیں ہے تو ری ایکٹ کریں (Processing...)
 	if !isReply {
 		react(client, v.Info.Chat, v.Info.ID, "🧠")
 	}
@@ -85,7 +85,6 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 		val, err := rdb.Get(context.Background(), key).Result()
 		if err == nil {
 			var session AISession
-			// Error handling for Unmarshal ignored for brevity, but good to check
 			_ = json.Unmarshal([]byte(val), &session)
 
 			// اگر سیشن 30 منٹ سے پرانا ہو تو نیا شروع کریں
@@ -98,21 +97,21 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 	// 🕵️ AI کی شخصیت سیٹ کریں
 	aiName := "Impossible AI"
 	if strings.ToLower(cmd) == "gpt" {
-		aiName = "GPT-4" // نام بھلے جی پی ٹی ہو، کام جمینائی کرے گا 😉
+		aiName = "GPT-4"
 	}
 
-	// ہسٹری کو لمٹ کریں (تاکہ ٹوکنز ضائع نہ ہوں)
+	// ہسٹری کو لمٹ کریں
 	if len(history) > 1500 {
 		history = history[len(history)-1500:]
 	}
 
-	// 🔥 [UPDATED PROMPT]
+	// 🔥 [PROMPT]
 	fullPrompt := fmt.Sprintf(
 		"System: You are %s, a smart and friendly assistant.\n"+
 			"🔴 IMPORTANT RULES:\n"+
-			"1. **Match User's Language & Script:** If user types in Roman Urdu (e.g., 'kese ho'), reply ONLY in Roman Urdu. If user types in Urdu Script (e.g., 'کیسے ہو'), reply in Urdu Script. If English, reply in English. NEVER use Hindi/Devanagari script.\n"+
-			"2. **Detect Topic Change:** The provided history is for context ONLY. If the User's NEW message changes the topic (e.g., from Weather to Friendship), STOP talking about the old topic immediately. Focus 100%% on the new message.\n"+
-			"3. **Be Casual:** Do not be overly formal. Talk like a close friend.\n"+
+			"1. **Match User's Language & Script:** If user types in Roman Urdu, reply in Roman Urdu. If Urdu Script, reply in Urdu Script. If English, reply in English.\n"+
+			"2. **Detect Topic Change:** Focus 100%% on the new message.\n"+
+			"3. **Be Casual:** Talk like a close friend.\n"+
 			"----------------\n"+
 			"Chat History:\n%s\n"+
 			"----------------\n"+
@@ -120,23 +119,26 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 			"AI Response:",
 		aiName, history, query)
 
-	// 🚀 GEMINI INTEGRATION STARTS HERE
+	// 🚀 GEMINI INTEGRATION
 	ctx := context.Background()
 	
-	// کلائنٹ بنائیں (یہ Environment Variable سے GEMINI_API_KEY اٹھائے گا)
+	// کلائنٹ بنائیں
 	genaiClient, err := genai.NewClient(ctx, nil)
 	if err != nil {
 		log.Println("Error creating Gemini client:", err)
 		if !isReply {
-			replyMessage(client, v, "🤖 System Error: API Key not found.")
+			// 🛑 Client Creation Error بھیجیں
+			errMsg := fmt.Sprintf("❌ *Client Error:*\n```%v```", err)
+			replyMessage(client, v, errMsg)
 		}
 		return
 	}
 
-	// ماڈل کو کال کریں (gemini-2.5-flash)
+	// ماڈل کو کال کریں
+	// نوٹ: اگر ماڈل کا نام غلط ہوا تو یہیں ایرر آئے گا
 	result, err := genaiClient.Models.GenerateContent(
 		ctx,
-		"gemini-2.5-flash",
+		"gemini-2.5-flash", // میک شور کریں کہ یہ ماڈل آپ کے اکاؤنٹ پر ایکٹو ہے
 		genai.Text(fullPrompt),
 		nil,
 	)
@@ -145,15 +147,17 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 	if err != nil {
 		log.Println("Gemini API Error:", err)
 		if !isReply {
-			replyMessage(client, v, "🤖 Brain Overload! Gemini is sleeping.")
+			// 🛑 🛑 🛑 MAIN FIX IS HERE 🛑 🛑 🛑
+			// اصلی ایرر میسج بھیجیں
+			actualError := fmt.Sprintf("❌ *Gemini API Error:*\n```%v```", err)
+			replyMessage(client, v, actualError)
 		}
 		return
 	} else {
-		// جواب حاصل کریں
 		finalResponse = result.Text()
 	}
 
-	// ✅ جواب بھیجیں اور ID نوٹ کریں
+	// ✅ جواب بھیجیں
 	respPtr, err := client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		ExtendedTextMessage: &waProto.ExtendedTextMessage{
 			Text: proto.String(finalResponse),
@@ -180,7 +184,6 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 			rdb.Set(context.Background(), "ai_session:"+senderID, jsonData, 30*time.Minute)
 		}
 
-		// اگر یہ رپلائی نہیں تھا تو گرین ٹک
 		if !isReply {
 			react(client, v.Info.Chat, v.Info.ID, "✅")
 		}

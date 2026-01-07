@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/types" // ✅ یہ لائن اب شامل ہے (Fix 1)
 	"go.mau.fi/whatsmeow/types/events"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"google.golang.org/protobuf/proto"
@@ -65,7 +66,6 @@ func HandleButtonCommands(client *whatsmeow.Client, evt *events.Message) {
 	case ".btn 4":
 		// 📜 TEST 4: LIST MENU (Single Select)
 		fmt.Println("Testing List Menu...")
-		// لسٹ کا JSON تھوڑا لمبا ہوتا ہے
 		listJson := `{
 			"title": "✨ Select Option",
 			"sections": [
@@ -86,7 +86,7 @@ func HandleButtonCommands(client *whatsmeow.Client, evt *events.Message) {
 		}`
 		sendNativeFlow(client, chatJID, "📂 *List Menu Test*", "نیچے مینیو کھولیں۔", []NativeButton{
 			{
-				Name: "single_select", // لسٹ کے لیے یہ ٹائپ یوز ہوتی ہے
+				Name: "single_select",
 				Params: listJson,
 			},
 		})
@@ -125,7 +125,7 @@ func HandleButtonCommands(client *whatsmeow.Client, evt *events.Message) {
 }
 
 // ---------------------------------------------------------
-// 👇 HELPER FUNCTIONS (اس کو مت چھیڑیں، یہ انجن ہے)
+// 👇 HELPER FUNCTIONS (FIXED FOR LATEST WHATSMEOW)
 // ---------------------------------------------------------
 
 type NativeButton struct {
@@ -139,30 +139,27 @@ func sendNativeFlow(client *whatsmeow.Client, jid types.JID, title string, body 
 	for _, btn := range buttons {
 		protoButtons = append(protoButtons, &waProto.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
 			Name:             proto.String(btn.Name),
-			ButtonParamsJson: proto.String(btn.Params),
+			ButtonParamsJSON: proto.String(btn.Params), // ✅ FIX 2: Json -> JSON
 		})
 	}
 
-	// میسج کا اسٹرکچر
+	// میسج کا اسٹرکچر (ViewOnce کو ہٹا دیا ہے تاکہ ایرر نہ آئے)
 	msg := &waProto.Message{
-		ViewOnceMessage: &waProto.ViewOnceMessage{ // ViewOnce ٹرک استعمال کر رہے ہیں
-			Message: &waProto.Message{
-				InteractiveMessage: &waProto.InteractiveMessage{
-					Header: &waProto.InteractiveMessage_Header{
-						Title:              proto.String(title),
-						HasMediaAttachment: proto.Bool(false),
-					},
-					Body: &waProto.InteractiveMessage_Body{
-						Text: proto.String(body),
-					},
-					Footer: &waProto.InteractiveMessage_Footer{
-						Text: proto.String("🤖 Impossible Bot Beta"),
-					},
-					InteractiveMessageNativeFlow: &waProto.InteractiveMessage_NativeFlowMessage{
-						Buttons:        protoButtons,
-						MessageVersion: proto.Int32(1),
-					},
-				},
+		InteractiveMessage: &waProto.InteractiveMessage{
+			Header: &waProto.InteractiveMessage_Header{
+				Title:              proto.String(title),
+				HasMediaAttachment: proto.Bool(false),
+			},
+			Body: &waProto.InteractiveMessage_Body{
+				Text: proto.String(body),
+			},
+			Footer: &waProto.InteractiveMessage_Footer{
+				Text: proto.String("🤖 Impossible Bot Beta"),
+			},
+			// ✅ FIX 3: فیلڈ کا نام درست کیا
+			NativeFlowMessage: &waProto.InteractiveMessage_NativeFlowMessage{
+				Buttons:        protoButtons,
+				MessageVersion: proto.Int32(1),
 			},
 		},
 	}
