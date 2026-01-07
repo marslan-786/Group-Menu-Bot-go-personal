@@ -26,6 +26,7 @@ RUN go mod init impossible-bot && \
     go get github.com/gorilla/websocket@latest && \
     go get google.golang.org/protobuf/proto@latest && \
     go get github.com/showwin/speedtest-go && \
+    go get google.golang.org/genai && \
     go mod tidy
 
 RUN CGO_ENABLED=1 GOOS=linux go build -v -ldflags="-s -w" -o bot .

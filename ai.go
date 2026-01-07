@@ -4,17 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"strings"
 	"time"
-
+    "log" 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/genai"
 )
 
 // 💾 AI کی یادداشت کا اسٹرکچر
@@ -80,17 +78,18 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 
 	senderID := v.Info.Sender.ToNonAD().String()
 	var history string = ""
-	
+
 	// --- REDIS: پرانی چیٹ لوڈ کریں ---
 	if rdb != nil {
 		key := "ai_session:" + senderID
 		val, err := rdb.Get(context.Background(), key).Result()
 		if err == nil {
 			var session AISession
-			json.Unmarshal([]byte(val), &session)
-			
+			// Error handling for Unmarshal ignored for brevity, but good to check
+			_ = json.Unmarshal([]byte(val), &session)
+
 			// اگر سیشن 30 منٹ سے پرانا ہو تو نیا شروع کریں
-			if time.Now().Unix() - session.LastUpdated < 1800 {
+			if time.Now().Unix()-session.LastUpdated < 1800 {
 				history = session.History
 			}
 		}
@@ -98,58 +97,60 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 
 	// 🕵️ AI کی شخصیت سیٹ کریں
 	aiName := "Impossible AI"
-	if strings.ToLower(cmd) == "gpt" { aiName = "GPT-4" }
-	
-	// ہسٹری کو لمٹ کریں
+	if strings.ToLower(cmd) == "gpt" {
+		aiName = "GPT-4" // نام بھلے جی پی ٹی ہو، کام جمینائی کرے گا 😉
+	}
+
+	// ہسٹری کو لمٹ کریں (تاکہ ٹوکنز ضائع نہ ہوں)
 	if len(history) > 1500 {
-		history = history[len(history)-1500:] 
+		history = history[len(history)-1500:]
 	}
 
 	// 🔥 [UPDATED PROMPT]
 	fullPrompt := fmt.Sprintf(
 		"System: You are %s, a smart and friendly assistant.\n"+
-		"🔴 IMPORTANT RULES:\n"+
-		"1. **Match User's Language & Script:** If user types in Roman Urdu (e.g., 'kese ho'), reply ONLY in Roman Urdu. If user types in Urdu Script (e.g., 'کیسے ہو'), reply in Urdu Script. If English, reply in English. NEVER use Hindi/Devanagari script.\n"+
-		"2. **Detect Topic Change:** The provided history is for context ONLY. If the User's NEW message changes the topic (e.g., from Weather to Friendship), STOP talking about the old topic immediately. Focus 100%% on the new message.\n"+
-		"3. **Be Casual:** Do not be overly formal. Talk like a close friend.\n"+
-		"----------------\n"+
-		"Chat History:\n%s\n"+
-		"----------------\n"+
-		"User's New Message: %s\n"+
-		"AI Response:",
+			"🔴 IMPORTANT RULES:\n"+
+			"1. **Match User's Language & Script:** If user types in Roman Urdu (e.g., 'kese ho'), reply ONLY in Roman Urdu. If user types in Urdu Script (e.g., 'کیسے ہو'), reply in Urdu Script. If English, reply in English. NEVER use Hindi/Devanagari script.\n"+
+			"2. **Detect Topic Change:** The provided history is for context ONLY. If the User's NEW message changes the topic (e.g., from Weather to Friendship), STOP talking about the old topic immediately. Focus 100%% on the new message.\n"+
+			"3. **Be Casual:** Do not be overly formal. Talk like a close friend.\n"+
+			"----------------\n"+
+			"Chat History:\n%s\n"+
+			"----------------\n"+
+			"User's New Message: %s\n"+
+			"AI Response:",
 		aiName, history, query)
 
-	// 🚀 ماڈلز کی لسٹ
-	models := []string{"openai", "mistral", "karma"}
-	var finalResponse string
-	success := false
-
-	for _, model := range models {
-		apiUrl := fmt.Sprintf("https://text.pollinations.ai/%s?model=%s", 
-			url.QueryEscape(fullPrompt), model)
-
-		clientHttp := http.Client{Timeout: 30 * time.Second}
-		resp, err := clientHttp.Get(apiUrl)
-		if err != nil { continue }
-		
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		res := string(body)
-
-		if strings.HasPrefix(res, "{") && strings.Contains(res, "error") {
-			continue 
-		}
-
-		finalResponse = res
-		success = true
-		break
-	}
-
-	if !success {
+	// 🚀 GEMINI INTEGRATION STARTS HERE
+	ctx := context.Background()
+	
+	// کلائنٹ بنائیں (یہ Environment Variable سے GEMINI_API_KEY اٹھائے گا)
+	genaiClient, err := genai.NewClient(ctx, nil)
+	if err != nil {
+		log.Println("Error creating Gemini client:", err)
 		if !isReply {
-			replyMessage(client, v, "🤖 Brain Overload! Try again.")
+			replyMessage(client, v, "🤖 System Error: API Key not found.")
 		}
 		return
+	}
+
+	// ماڈل کو کال کریں (gemini-2.5-flash)
+	result, err := genaiClient.Models.GenerateContent(
+		ctx,
+		"gemini-2.5-flash",
+		genai.Text(fullPrompt),
+		nil,
+	)
+
+	var finalResponse string
+	if err != nil {
+		log.Println("Gemini API Error:", err)
+		if !isReply {
+			replyMessage(client, v, "🤖 Brain Overload! Gemini is sleeping.")
+		}
+		return
+	} else {
+		// جواب حاصل کریں
+		finalResponse = result.Text()
 	}
 
 	// ✅ جواب بھیجیں اور ID نوٹ کریں
@@ -157,7 +158,7 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 		ExtendedTextMessage: &waProto.ExtendedTextMessage{
 			Text: proto.String(finalResponse),
 			ContextInfo: &waProto.ContextInfo{
-				StanzaID:      proto.String(v.Info.ID), // Fixed: StanzaID
+				StanzaID:      proto.String(v.Info.ID),
 				Participant:   proto.String(v.Info.Sender.String()),
 				QuotedMessage: v.Message,
 			},
@@ -168,23 +169,24 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 		// --- REDIS: نیا ڈیٹا محفوظ کریں ---
 		if rdb != nil {
 			newHistory := fmt.Sprintf("%s\nUser: %s\nAI: %s", history, query, finalResponse)
-			
+
 			newSession := AISession{
 				History:     newHistory,
-				LastMsgID:   respPtr.ID, 
+				LastMsgID:   respPtr.ID,
 				LastUpdated: time.Now().Unix(),
 			}
-			
+
 			jsonData, _ := json.Marshal(newSession)
 			rdb.Set(context.Background(), "ai_session:"+senderID, jsonData, 30*time.Minute)
 		}
-		
+
 		// اگر یہ رپلائی نہیں تھا تو گرین ٹک
 		if !isReply {
 			react(client, v.Info.Chat, v.Info.ID, "✅")
 		}
 	}
 }
+
 
 // --- 👇 FIXED PRANK FUNCTION 👇 ---
 
