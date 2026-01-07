@@ -6,21 +6,19 @@ import (
 	"strings"
 
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/types" // ✅ یہ لائن اب شامل ہے (Fix 1)
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"google.golang.org/protobuf/proto"
 )
 
-// 🎛️ MAIN SWITCH HANDLER
+// 🎛️ MAIN SWITCH HANDLER (No Changes Here)
 func HandleButtonCommands(client *whatsmeow.Client, evt *events.Message) {
-	// میسج کا ٹیکسٹ حاصل کریں
 	text := evt.Message.GetConversation()
 	if text == "" {
 		text = evt.Message.GetExtendedTextMessage().GetText()
 	}
 
-	// کمانڈ چیک کریں (Case Insensitive)
 	if !strings.HasPrefix(strings.ToLower(text), ".btn") {
 		return
 	}
@@ -30,41 +28,37 @@ func HandleButtonCommands(client *whatsmeow.Client, evt *events.Message) {
 
 	switch cmd {
 	case ".btn 1":
-		// 📋 TEST 1: COPY CODE BUTTON
 		fmt.Println("Testing Copy Button...")
 		sendNativeFlow(client, chatJID, "🔥 *Copy Button Test*", "نیچے بٹن دبا کر کوڈ کاپی کریں۔", []NativeButton{
 			{
-				Name: "cta_copy",
+				Name:   "cta_copy",
 				Params: `{"display_text":"👉 Copy Code","id":"copy_123","copy_code":"IMPOSSIBLE-2026"}`,
 			},
 		})
 
 	case ".btn 2":
-		// 🔗 TEST 2: URL BUTTON
 		fmt.Println("Testing URL Button...")
 		sendNativeFlow(client, chatJID, "🌍 *URL Button Test*", "ہماری ویب سائٹ وزٹ کریں۔", []NativeButton{
 			{
-				Name: "cta_url",
+				Name:   "cta_url",
 				Params: `{"display_text":"🌐 Open Google","url":"https://google.com","merchant_url":"https://google.com"}`,
 			},
 		})
 
 	case ".btn 3":
-		// ↩️ TEST 3: SIMPLE REPLY BUTTONS (Quick Reply)
 		fmt.Println("Testing Quick Reply...")
 		sendNativeFlow(client, chatJID, "💬 *Quick Reply Test*", "کیا آپ کو یہ پسند آیا؟", []NativeButton{
 			{
-				Name: "quick_reply",
+				Name:   "quick_reply",
 				Params: `{"display_text":"✅ Yes","id":"btn_yes"}`,
 			},
 			{
-				Name: "quick_reply",
+				Name:   "quick_reply",
 				Params: `{"display_text":"❌ No","id":"btn_no"}`,
 			},
 		})
 
 	case ".btn 4":
-		// 📜 TEST 4: LIST MENU (Single Select)
 		fmt.Println("Testing List Menu...")
 		listJson := `{
 			"title": "✨ Select Option",
@@ -86,38 +80,17 @@ func HandleButtonCommands(client *whatsmeow.Client, evt *events.Message) {
 		}`
 		sendNativeFlow(client, chatJID, "📂 *List Menu Test*", "نیچے مینیو کھولیں۔", []NativeButton{
 			{
-				Name: "single_select",
+				Name:   "single_select",
 				Params: listJson,
 			},
 		})
 
-	case ".btn 5":
-		// 🚀 TEST 5: HYBRID (Copy + URL + Reply)
-		fmt.Println("Testing Hybrid Buttons...")
-		sendNativeFlow(client, chatJID, "💎 *Hybrid Power Test*", "سارے بٹن ایک ساتھ!", []NativeButton{
-			{
-				Name: "cta_copy",
-				Params: `{"display_text":"📋 Copy ID","id":"copy_id","copy_code":"USER_786"}`,
-			},
-			{
-				Name: "cta_url",
-				Params: `{"display_text":"▶️ Watch Video","url":"https://youtube.com","merchant_url":"https://youtube.com"}`,
-			},
-			{
-				Name: "quick_reply",
-				Params: `{"display_text":"🔙 Back","id":"btn_back"}`,
-			},
-		})
-
 	default:
-		// ❓ HELP MESSAGE
 		menu := "🛠️ *BUTTON TESTER MENU*\n\n" +
 			"➤ `.btn 1` : Copy Code Button\n" +
 			"➤ `.btn 2` : Open URL Button\n" +
-			"➤ `.btn 3` : Reply Buttons (Yes/No)\n" +
-			"➤ `.btn 4` : List Menu (Drawer)\n" +
-			"➤ `.btn 5` : Mix Buttons\n"
-		
+			"➤ `.btn 3` : Reply Buttons\n" +
+			"➤ `.btn 4` : List Menu\n"
 		client.SendMessage(context.Background(), chatJID, &waProto.Message{
 			Conversation: proto.String(menu),
 		})
@@ -125,7 +98,7 @@ func HandleButtonCommands(client *whatsmeow.Client, evt *events.Message) {
 }
 
 // ---------------------------------------------------------
-// 👇 HELPER FUNCTIONS (FIXED FOR LATEST WHATSMEOW)
+// 👇 HELPER FUNCTIONS (CRITICAL FIXES APPLIED)
 // ---------------------------------------------------------
 
 type NativeButton struct {
@@ -134,16 +107,19 @@ type NativeButton struct {
 }
 
 func sendNativeFlow(client *whatsmeow.Client, jid types.JID, title string, body string, buttons []NativeButton) {
-	// 1. بٹنز کو Proto فارمیٹ میں کنورٹ کریں
+	// 1. بٹنز تیار کریں
 	var protoButtons []*waProto.InteractiveMessage_NativeFlowMessage_NativeFlowButton
 	for _, btn := range buttons {
 		protoButtons = append(protoButtons, &waProto.InteractiveMessage_NativeFlowMessage_NativeFlowButton{
 			Name:             proto.String(btn.Name),
-			ButtonParamsJSON: proto.String(btn.Params),
+			ButtonParamsJSON: proto.String(btn.Params), // ✅ Correct Field Name
 		})
 	}
 
-	// 2. میسج کا اسٹرکچر (Fixed Structure)
+	// 2. میسج اسٹرکچر (The Real Fix)
+	// NativeFlowMessage کو براہ راست InteractiveMessage میں نہیں ڈالا جا سکتا۔
+	// اسے InteractiveMessage_NativeFlowMessage_ (ایک انڈر سکور کے ساتھ) میں لپیٹنا پڑتا ہے۔
+	
 	msg := &waProto.Message{
 		ViewOnceMessage: &waProto.ViewOnceMessage{
 			Message: &waProto.Message{
@@ -156,19 +132,23 @@ func sendNativeFlow(client *whatsmeow.Client, jid types.JID, title string, body 
 						Text: proto.String(body),
 					},
 					Footer: &waProto.InteractiveMessage_Footer{
-						Text: proto.String("🤖 Impossible Bot"),
+						Text: proto.String("🤖 Impossible Bot Beta"),
 					},
-					// 🔴 FIX: یہاں درست فیلڈ استعمال ہو رہی ہے
-					InteractiveMessageNativeFlow: &waProto.InteractiveMessage_NativeFlowMessage{
-						Buttons:        protoButtons,
-						MessageVersion: proto.Int32(1),
+					
+					// 🛑 🛑 🛑 MAIN FIX IS HERE 🛑 🛑 🛑
+					// ہم InteractiveMessage فیلڈ (جو کہ ایک انٹرفیس ہے) کو استعمال کر رہے ہیں
+					// اور اس کے اندر "InteractiveMessage_NativeFlowMessage_" والا سٹرکٹ پاس کر رہے ہیں۔
+					InteractiveMessage: &waProto.InteractiveMessage_NativeFlowMessage_{
+						NativeFlowMessage: &waProto.InteractiveMessage_NativeFlowMessage{
+							Buttons:        protoButtons,
+							MessageVersion: proto.Int32(1),
+						},
 					},
 				},
 			},
 		},
 	}
 
-	// 3. سینڈ کریں
 	_, err := client.SendMessage(context.Background(), jid, msg)
 	if err != nil {
 		fmt.Println("❌ Error sending buttons:", err)
