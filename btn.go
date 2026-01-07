@@ -120,7 +120,7 @@ func sendNativeFlow(client *whatsmeow.Client, evt *events.Message, title string,
 					// 🔥 FORCE RENDER TRICK (ContextInfo)
 					// یہ سب سے اہم لائنز ہیں۔ یہ میسج کو رپلائی بنا دیتی ہیں جس سے بٹن شو ہو جاتے ہیں۔
 					ContextInfo: &waE2E.ContextInfo{
-						StanzaId:      proto.String(evt.Info.ID),
+						StanzaID:      proto.String(evt.Info.ID),
 						Participant:   proto.String(evt.Info.Sender.String()),
 						QuotedMessage: evt.Message,
 					},
