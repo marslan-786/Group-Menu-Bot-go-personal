@@ -314,7 +314,7 @@ func splitAndSend(client *whatsmeow.Client, v *events.Message, sourcePath string
 	}
 	defer file.Close()
 
-	buffer := make([]byte, 1024*32) // 32KB buffer for copying
+//	buffer := make([]byte, 1024*32) // 32KB buffer for copying
 	partNum := 1
 
 	for {
