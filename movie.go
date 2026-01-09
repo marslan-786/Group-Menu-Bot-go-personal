@@ -8,17 +8,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/proto/waE2E"
-	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	waProto "go.mau.fi/whatsmeow/proto/waE2E"
+	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -30,9 +27,11 @@ type MovieResult struct {
 	Downloads  int
 }
 
-// یوزر کی سرچ ہسٹری محفوظ کرنے کے لیے (UserJID -> Movies List)
+// یوزر کی سرچ ہسٹری محفوظ کرنے کے لیے
 var searchCache = make(map[string][]MovieResult)
-var cacheMutex sync.Mutex
+
+// ⚠️ ہم نے نام تبدیل کر دیا تاکہ main.go والی cacheMutex سے ٹکراؤ نہ ہو
+var movieMutex sync.Mutex 
 
 // Archive API Response Structures
 type IAHeader struct {
@@ -50,10 +49,9 @@ type IAMetadata struct {
 	Files []struct {
 		Name   string `json:"name"`
 		Format string `json:"format"`
-		Size   string `json:"size"` // Size as string
+		Size   string `json:"size"` 
 	} `json:"files"`
 }
-
 
 func handleArchive(client *whatsmeow.Client, v *events.Message, input string) {
 	if input == "" { return }
@@ -63,17 +61,16 @@ func handleArchive(client *whatsmeow.Client, v *events.Message, input string) {
 	// --- 1️⃣ کیا یوزر نے نمبر سلیکٹ کیا ہے؟ (Selection Logic) ---
 	if isNumber(input) {
 		index, _ := strconv.Atoi(input)
-		cacheMutex.Lock()
+		
+		movieMutex.Lock()
 		movies, exists := searchCache[senderJID]
-		cacheMutex.Unlock()
+		movieMutex.Unlock()
 
 		if exists && index > 0 && index <= len(movies) {
 			selectedMovie := movies[index-1]
 			// یہاں ہم سلیکٹڈ مووی کو ڈاؤن لوڈ کریں گے
 			react(client, v.Info.Chat, v.Info.ID, "💿")
 			downloadFromIdentifier(client, v, selectedMovie)
-			// سرچ کلیئر کر دیں (آپشنل)
-			// delete(searchCache, senderJID) 
 			return
 		}
 	}
@@ -81,6 +78,8 @@ func handleArchive(client *whatsmeow.Client, v *events.Message, input string) {
 	// --- 2️⃣ کیا یہ ڈائریکٹ لنک ہے؟ (Direct Link Logic) ---
 	if strings.HasPrefix(input, "http") {
 		react(client, v.Info.Chat, v.Info.ID, "🔗")
+		// پریمیم کارڈ ہٹا کر سادہ میسج
+		replyMessage(client, v, "⏳ *Processing Direct Link...*")
 		downloadFileDirectly(client, v, input, "Unknown_File")
 		return
 	}
@@ -93,7 +92,6 @@ func handleArchive(client *whatsmeow.Client, v *events.Message, input string) {
 // --- 🔍 Helper: Search Engine ---
 func performSearch(client *whatsmeow.Client, v *events.Message, query string, senderJID string) {
 	// Archive Advanced Search API
-	// ہم صرف Movies فلٹر کر رہے ہیں اور ڈاؤن لوڈز کے حساب سے ترتیب دے رہے ہیں
 	encodedQuery := url.QueryEscape(fmt.Sprintf("title:(%s) AND mediatype:(movies)", query))
 	apiURL := fmt.Sprintf("https://archive.org/advancedsearch.php?q=%s&fl[]=identifier&fl[]=title&fl[]=year&fl[]=downloads&sort[]=downloads+desc&output=json&rows=10", encodedQuery)
 
@@ -118,7 +116,7 @@ func performSearch(client *whatsmeow.Client, v *events.Message, query string, se
 
 	// میموری میں محفوظ کریں
 	var movieList []MovieResult
-	msgText := fmt.Sprintf("🎬 *Archive Search Results:* '%s'\n\n", query)
+	msgText := fmt.Sprintf("🎬 *Archive Results for:* '%s'\n\n", query)
 
 	for i, doc := range docs {
 		movieList = append(movieList, MovieResult{
@@ -127,27 +125,24 @@ func performSearch(client *whatsmeow.Client, v *events.Message, query string, se
 			Year:       doc.Year,
 			Downloads:  doc.Downloads,
 		})
-		msgText += fmt.Sprintf("*%d.* %s (%s)\n   └ 📥 %d Downloads\n", i+1, doc.Title, doc.Year, doc.Downloads)
+		msgText += fmt.Sprintf("*%d.* %s (%s)\n", i+1, doc.Title, doc.Year)
 	}
 	
-	msgText += "\n👇 *Reply with a number (e.g., 1) to download.*"
+	msgText += "\n👇 *Reply with a number to download.*"
 
 	// گلوبل کیشے اپڈیٹ کریں
-	cacheMutex.Lock()
+	movieMutex.Lock()
 	searchCache[senderJID] = movieList
-	cacheMutex.Unlock()
+	movieMutex.Unlock()
 
-	// لسٹ بھیجیں
+	// سادہ لسٹ بھیجیں (بغیر پریمیم کارڈ کے)
 	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		ExtendedTextMessage: &waProto.ExtendedTextMessage{
 			Text: proto.String(msgText),
 			ContextInfo: &waProto.ContextInfo{
-				ExternalAdReply: &waProto.ContextInfo_ExternalAdReplyInfo{
-					Title:     proto.String("Archive Search Engine"),
-					Body:      proto.String("Select a movie to download"),
-					MediaType: waProto.ContextInfo_ExternalAdReplyInfo_IMAGE.Enum(),
-					// ThumbnailUrl: proto.String("ANY_IMAGE_URL_HERE"), 
-				},
+				StanzaID:      proto.String(v.Info.ID),
+				Participant:   proto.String(v.Info.Sender.String()),
+				QuotedMessage: v.Message,
 			},
 		},
 	})
@@ -164,15 +159,11 @@ func downloadFromIdentifier(client *whatsmeow.Client, v *events.Message, movie M
 	var meta IAMetadata
 	json.NewDecoder(resp.Body).Decode(&meta)
 
-	// سب سے بڑی ویڈیو فائل ڈھونڈیں (taake trailer download na ho)
 	bestFile := ""
 	maxSize := int64(0)
 
 	for _, f := range meta.Files {
-		// صرف ویڈیو فارمیٹس
 		if strings.HasSuffix(strings.ToLower(f.Name), ".mp4") || strings.HasSuffix(strings.ToLower(f.Name), ".mkv") {
-			// Size string se int convert karein (approx)
-			// Archive size bytes mein deta hai string format mein
 			s, _ := strconv.ParseInt(f.Size, 10, 64)
 			if s > maxSize {
 				maxSize = s
@@ -182,21 +173,19 @@ func downloadFromIdentifier(client *whatsmeow.Client, v *events.Message, movie M
 	}
 
 	if bestFile == "" {
-		replyMessage(client, v, "❌ No suitable video file found in this archive.")
+		replyMessage(client, v, "❌ No suitable video file found.")
 		return
 	}
 
-	// فائنل لنک بنائیں
 	finalURL := fmt.Sprintf("https://archive.org/download/%s/%s", movie.Identifier, url.PathEscape(bestFile))
 	
-	// اب ڈاؤنلوڈ فنکشن کو کال کریں
-	sendPremiumCard(client, v, "Downloading Movie", movie.Title, "🚀 Fetching high quality rip...")
+	// پریمیم کارڈ ہٹا دیا
+	replyMessage(client, v, fmt.Sprintf("🚀 *Downloading:* %s\n📦 *Please wait...*", movie.Title))
 	
-	// یہ فنکشن وہی ہے جو آپ کے پاس پہلے تھا، بس تھوڑا سا الگ کیا ہے
 	go downloadFileDirectly(client, v, finalURL, movie.Title)
 }
 
-// --- 🚀 Core Downloader (Apka purana logic, optimized) ---
+// --- 🚀 Core Downloader ---
 func downloadFileDirectly(client *whatsmeow.Client, v *events.Message, urlStr string, customTitle string) {
 	req, _ := http.NewRequest("GET", urlStr, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
@@ -215,63 +204,40 @@ func downloadFileDirectly(client *whatsmeow.Client, v *events.Message, urlStr st
 		parts := strings.Split(urlStr, "/")
 		fileName = parts[len(parts)-1]
 	}
-	if !strings.Contains(fileName, ".") { fileName += ".mp4" } // Default extension
+	if !strings.Contains(fileName, ".") { fileName += ".mp4" }
 
 	// Temp File
 	tempFile := fmt.Sprintf("temp_%d_%s", time.Now().UnixNano(), fileName)
 	out, _ := os.Create(tempFile)
-	io.Copy(out, resp.Body) // ڈاؤنلوڈنگ۔۔۔
+	io.Copy(out, resp.Body)
 	out.Close()
 
 	fileData, _ := os.ReadFile(tempFile)
 	defer os.Remove(tempFile)
 
-	// Upload Logic (WhatsApp)
 	up, err := client.Upload(context.Background(), fileData, whatsmeow.MediaDocument)
 	if err != nil {
 		replyMessage(client, v, "❌ Upload Failed.")
 		return
 	}
 
-	// Send Logic
+	// Send Logic (Simple Video Message)
 	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		DocumentMessage: &waProto.DocumentMessage{
 			URL:           proto.String(up.URL),
 			DirectPath:    proto.String(up.DirectPath),
 			MediaKey:      up.MediaKey,
-			Mimetype:      proto.String("video/mp4"), // Force video type
+			Mimetype:      proto.String("video/mp4"),
 			Title:         proto.String(fileName),
 			FileName:      proto.String(fileName),
 			FileLength:    proto.Uint64(uint64(len(fileData))),
 			FileSHA256:    up.FileSHA256,
 			FileEncSHA256: up.FileEncSHA256,
-			ContextInfo: &waProto.ContextInfo{
-				ExternalAdReply: &waProto.ContextInfo_ExternalAdReplyInfo{
-					Title:     proto.String(fileName),
-					Body:      proto.String("Downloaded via Archive Bot"),
-					SourceURL: proto.String(urlStr),
-					MediaType: waProto.ContextInfo_ExternalAdReplyInfo_VIDEO.Enum(), // Video Icon
-				},
-			},
+			Caption:       proto.String("✅ " + fileName),
 		},
 	})
 	react(client, v.Info.Chat, v.Info.ID, "✅")
 }
 
-// Helper for Number Check
-func isNumber(s string) bool {
-	_, err := strconv.Atoi(s)
-	return err == nil
-}
-
-// Helper wrappers (Apke existing code ke hisaab se)
-func replyMessage(client *whatsmeow.Client, v *events.Message, text string) {
-	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{Conversation: proto.String(text)})
-}
-func react(client *whatsmeow.Client, jid types.JID, msgID types.MessageID, emoji string) {
-    // React implementation here
-}
-func sendPremiumCard(client *whatsmeow.Client, v *events.Message, title, body, footer string) {
-    // Apka premium card implementation
-}
-
+// نوٹ: isNumber, replyMessage, react, sendPremiumCard فنکشنز یہاں سے ڈیلیٹ کر دیے گئے ہیں 
+// کیونکہ وہ commands.go اور downloader.go میں پہلے سے موجود ہیں۔
