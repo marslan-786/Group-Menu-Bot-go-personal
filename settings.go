@@ -17,27 +17,29 @@ import (
 // ==================== سیٹنگز سسٹم ====================
 func toggleAlwaysOnline(client *whatsmeow.Client, v *events.Message) {
 	if !isOwner(client, v.Info.Sender) {
-		msg := `╔════════════════╗
-║ ❌ ACCESS DENIED
-╠════════════════╣
-║ 🔒 Owner Only
-╚════════════════╝`
-		replyMessage(client, v, msg)
+		replyMessage(client, v, "❌ Owner Only")
 		return
 	}
 
 	status := "OFF 🔴"
 	statusText := "Disabled"
+	
 	dataMutex.Lock()
 	data.AlwaysOnline = !data.AlwaysOnline
-	if data.AlwaysOnline {
+	newState := data.AlwaysOnline
+	dataMutex.Unlock()
+
+	// ⚡ فوری اثر کے لیے ابھی بھیجیں
+	if newState {
 		client.SendPresence(context.Background(), types.PresenceAvailable)
 		status = "ON 🟢"
 		statusText = "Enabled"
 	} else {
 		client.SendPresence(context.Background(), types.PresenceUnavailable)
 	}
-	dataMutex.Unlock()
+    
+    // 💾 سیٹنگز کو محفوظ کرنا نہ بھولیں (Redis/File میں)
+    // saveGlobalSettings() // اگر آپ کا کوئی سیو فنکشن ہے تو یہاں کال کریں
 
 	msg := fmt.Sprintf(`╔════════════════╗
 ║ ⚙️ ALWAYS ONLINE
@@ -49,6 +51,7 @@ func toggleAlwaysOnline(client *whatsmeow.Client, v *events.Message) {
 
 	replyMessage(client, v, msg)
 }
+
 
 func toggleAutoRead(client *whatsmeow.Client, v *events.Message) {
 	if !isOwner(client, v.Info.Sender) {

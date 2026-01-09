@@ -223,13 +223,43 @@ func ConnectNewSession(device *store.Device) {
 		fmt.Printf("❌ [CONNECT ERROR] Bot %s: %v\n", cleanID, err)
 		return
 	}
-
+    go StartKeepAliveLoop(newBotClient) 
 	clientsMutex.Lock()
 	activeClients[cleanID] = newBotClient
 	clientsMutex.Unlock()
 
 	fmt.Printf("✅ [CONNECTED] Bot: %s | Prefix: %s | Status: Ready\n", cleanID, p)
 }
+
+// 🔄 یہ فنکشن ہر بوٹ کے کنیکٹ ہونے پر کال کریں
+func StartKeepAliveLoop(client *whatsmeow.Client) {
+	go func() {
+		for {
+			// اگر کلائنٹ کنیکٹ نہیں ہے یا نِل ہے تو لوپ روک دیں
+			if client == nil || !client.IsConnected() {
+				time.Sleep(10 * time.Second)
+				continue
+			}
+
+			// ⚡ سیٹنگ چیک کریں
+			dataMutex.RLock()
+			isEnabled := data.AlwaysOnline
+			dataMutex.RUnlock()
+
+			// ✅ اگر آپشن آن ہے تو پریزنس بھیجیں
+			if isEnabled {
+				err := client.SendPresence(context.Background(), types.PresenceAvailable)
+				if err != nil {
+					// خاموشی سے اگنور کریں یا لاگ کریں
+				}
+			}
+
+			// ⏳ 25 سیکنڈ کا وقفہ (تاکہ واٹس ایپ آف لائن نہ کرے)
+			time.Sleep(30 * time.Second)
+		}
+	}()
+}
+
 
 func updatePrefixDB(botID string, newPrefix string) {
 	prefixMutex.Lock()

@@ -1144,9 +1144,6 @@ func sendMenu(client *whatsmeow.Client, v *events.Message) {
 ║ │ 🔸 *%sdelstatus* - Del Target
 ║ │ 🔸 *%sliststatus* - List Target
 ║ │ 🔸 *%sreadallstatus* - Read All
-║ │ 🔸 *%santibug* - Bug Protect
-║ │ 🔸 *%ssend* - Send Bug
-║ │ 🔸 *%ssd* - Del Session
 ║ │ 🔸 *%slistbots* - Active Bots
 ║ ╰───────────────────────╯
 ╚══════════════════════╝`,
@@ -1168,7 +1165,7 @@ func sendMenu(client *whatsmeow.Client, v *events.Message) {
 		// 🛡️ Group Security (5)
 		p, p, p, p, p,
 		// ⚙️ Owner Control (14)
-		p, p, p, p, p, p, p, p, p, p, p, p, p, p)
+		p, p, p, p, p, p, p, p, p, p, p)
 
 	// 🚀 CACHING LOGIC
 	if cachedMenuImage != nil {
