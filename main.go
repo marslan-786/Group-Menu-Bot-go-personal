@@ -68,6 +68,8 @@ var (
 	historyDB             *sql.DB // ✅ MySQL Connection for Chat History
 	rdb                   *redis.Client
 	ctx                   = context.Background()
+	mediaCollection *mongo.Collection
+    statusCollection *mongo.Collection // optional (statuses کیلئے)
 	persistentUptime      int64
 	groupCache            = make(map[string]*GroupSettings)
 	cacheMutex            sync.RWMutex
@@ -148,18 +150,23 @@ func startPersistentUptimeTracker() {
 func main() {
 	fmt.Println("🚀 IMPOSSIBLE BOT | STARTING (HYBRID MODE)")
 
-	// 1. Init Services
+	// ----------------------------------------------------
+	// 1) Init Core Services
+	// ----------------------------------------------------
 	initRedis()
 	loadPersistentUptime()
 	loadGlobalSettings()
 	startPersistentUptimeTracker()
 	SetupFeatures()
 
-	// 2. MongoDB Connection (Old Logic Kept)
+	// ----------------------------------------------------
+	// 2) MongoDB (Optional) - Chat history + Media + Status
+	// ----------------------------------------------------
 	mongoURL := os.Getenv("MONGO_URL")
 	if mongoURL != "" {
 		mCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+
 		mClient, err := mongo.Connect(mCtx, options.Client().ApplyURI(mongoURL))
 		if err != nil {
 			fmt.Println("❌ MongoDB Connection Error:", err)
@@ -168,32 +175,103 @@ func main() {
 				fmt.Println("❌ MongoDB Ping Failed:", err)
 			} else {
 				mongoClient = mClient
-				chatHistoryCollection = mClient.Database("whatsapp_bot").Collection("messages")
-				fmt.Println("🍃 [MONGODB] Connected for Chat History!")
+
+				db := mClient.Database("whatsapp_bot")
+				chatHistoryCollection = db.Collection("messages")
+				mediaCollection = db.Collection("media")
+				statusCollection = db.Collection("statuses")
+
+				fmt.Println("🍃 [MONGODB] Connected for Chat History + Media + Status!")
+
+				// ✅ Ensure indexes (speed + duplicates protection)
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer cancel()
+
+					// messages indexes
+					_, _ = chatHistoryCollection.Indexes().CreateMany(ctx, []mongo.IndexModel{
+						{
+							Keys: bson.D{
+								{Key: "bot_id", Value: 1},
+								{Key: "chat_id", Value: 1},
+								{Key: "timestamp", Value: 1},
+							},
+						},
+						{
+							Keys:    bson.D{{Key: "message_id", Value: 1}},
+							Options: options.Index().SetUnique(true).SetSparse(true),
+						},
+					})
+
+					// media indexes
+					if mediaCollection != nil {
+						_, _ = mediaCollection.Indexes().CreateMany(ctx, []mongo.IndexModel{
+							{
+								Keys: bson.D{
+									{Key: "bot_id", Value: 1},
+									{Key: "chat_id", Value: 1},
+									{Key: "created_at", Value: 1},
+								},
+							},
+							{
+								Keys:    bson.D{{Key: "message_id", Value: 1}},
+								Options: options.Index().SetUnique(true).SetSparse(true),
+							},
+						})
+					}
+
+					// statuses indexes
+					if statusCollection != nil {
+						_, _ = statusCollection.Indexes().CreateMany(ctx, []mongo.IndexModel{
+							{
+								Keys: bson.D{
+									{Key: "bot_id", Value: 1},
+									{Key: "timestamp", Value: 1},
+								},
+							},
+							{
+								Keys: bson.D{
+									{Key: "chat_id", Value: 1},
+									{Key: "timestamp", Value: 1},
+								},
+							},
+						})
+					}
+
+					fmt.Println("✅ [MONGODB] Indexes ensured!")
+				}()
 			}
 		}
 	} else {
-		fmt.Println("⚠️ MONGO_URL not found! Chat history will not be saved.")
+		fmt.Println("⚠️ MONGO_URL not found! Chat history/media/status will not be saved.")
 	}
 
-	// 3. Postgres Connection (Sessions)
+	// ----------------------------------------------------
+	// 3) Postgres (Sessions / WhatsMeow Store)
+	// ----------------------------------------------------
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		log.Fatal("❌ FATAL ERROR: DATABASE_URL environment variable is missing!")
 	}
+
 	fmt.Println("🐘 [DATABASE] Connecting to PostgreSQL...")
 	rawDB, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatalf("❌ Failed to open Postgres connection: %v", err)
 	}
+
+	// Pool tuning
 	rawDB.SetMaxOpenConns(20)
 	rawDB.SetMaxIdleConns(5)
 	rawDB.SetConnMaxLifetime(30 * time.Minute)
 	fmt.Println("✅ [TUNING] Postgres Pool Configured")
 
-	// 4. WhatsMeow Container
+	// ----------------------------------------------------
+	// 4) WhatsMeow SQL Container
+	// ----------------------------------------------------
 	dbLog := waLog.Stdout("Database", "ERROR", true)
 	container = sqlstore.NewWithDB(rawDB, "postgres", dbLog)
+
 	err = container.Upgrade(context.Background())
 	if err != nil {
 		log.Fatalf("❌ Failed to initialize database tables: %v", err)
@@ -201,32 +279,69 @@ func main() {
 	fmt.Println("✅ [DATABASE] Tables verified/created successfully!")
 	dbContainer = container
 
-	// 5. Multi-Bot System
+	// ----------------------------------------------------
+	// 5) Multi-Bot System
+	// ----------------------------------------------------
 	fmt.Println("🤖 Initializing Multi-Bot System from Database...")
 	StartAllBots(container)
 	InitLIDSystem()
 
 	// ----------------------------------------------------
-	// 🌐 WEB ROUTES (Existing List HTML & Bot UI)
+	// 🌐 ROUTES (Bot UI + Web View)
 	// ----------------------------------------------------
 	http.HandleFunc("/", serveHTML)
 	http.HandleFunc("/pic.png", servePicture)
 	http.HandleFunc("/ws", handleWebSocket)
 
-	// Existing APIs
+	// Bot Pair / Session Management
 	http.HandleFunc("/api/pair", handlePairAPI)
 	http.HandleFunc("/link/pair/", handlePairAPILegacy)
 	http.HandleFunc("/link/delete", handleDeleteSession)
 	http.HandleFunc("/del/all", handleDelAllAPI)
 	http.HandleFunc("/del/", handleDelNumberAPI)
 
-	// Existing Web View APIs
+	// Web View APIs
 	http.HandleFunc("/lists", serveListsHTML)
+	http.HandleFunc("/lists/vip", serveListsHTML)
 	http.HandleFunc("/api/sessions", handleGetSessions)
 	http.HandleFunc("/api/chats", handleGetChats)
 	http.HandleFunc("/api/messages", handleGetMessages)
 	http.HandleFunc("/api/media", handleGetMedia)
 	http.HandleFunc("/api/avatar", handleGetAvatar)
+
+	// ✅ Status APIs (route now, handler later)
+	// (یہ اس لیے add کر دیا تاکہ frontend میں tab لگاتے ہی backend route ready ہو)
+	http.HandleFunc("/api/statuses", handleGetStatuses) // اگر ابھی نہیں بنا تو dummy بنا لیں گے
+
+	// ----------------------------------------------------
+	// ✅ Health / Ready
+	// ----------------------------------------------------
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true,"service":"impossible-bot"}`))
+	})
+
+	http.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		type dep struct {
+			Postgres bool `json:"postgres"`
+			Redis    bool `json:"redis"`
+			Mongo    bool `json:"mongo"`
+		}
+		d := dep{
+			Postgres: rawDB != nil,
+			Redis:    rdb != nil,
+			Mongo:    mongoClient != nil,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if !d.Postgres || !d.Redis {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "deps": d})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "deps": d})
+	})
 
 	// ----------------------------------------------------
 	// Server Boot
@@ -236,19 +351,31 @@ func main() {
 		port = "8080"
 	}
 
+	srv := &http.Server{
+		Addr:              ":" + port,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
 	go func() {
 		fmt.Printf("🌐 Web Server running on port %s\n", port)
-		if err := http.ListenAndServe(":"+port, nil); err != nil {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("❌ Server error: %v\n", err)
 		}
 	}()
 
-	// Shutdown
+	// ----------------------------------------------------
+	// Graceful Shutdown
+	// ----------------------------------------------------
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
 	fmt.Println("\n🛑 Shutting down system...")
+
+	ctxShutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctxShutdown)
+
 	clientsMutex.Lock()
 	for id, activeClient := range activeClients {
 		fmt.Printf("🔌 Disconnecting Bot: %s\n", id)
@@ -257,15 +384,21 @@ func main() {
 	clientsMutex.Unlock()
 
 	if mongoClient != nil {
-		mongoClient.Disconnect(context.Background())
+		_ = mongoClient.Disconnect(context.Background())
 	}
 	if rawDB != nil {
-		rawDB.Close()
+		_ = rawDB.Close()
 	}
 	if historyDB != nil {
-		historyDB.Close()
+		_ = historyDB.Close()
 	}
+
 	fmt.Println("👋 Goodbye!")
+}
+
+func handleGetStatuses(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`[]`))
 }
 
 func serveHTML(w http.ResponseWriter, r *http.Request) {
@@ -294,147 +427,275 @@ func UploadToCatbox(data []byte, filename string) (string, error) {
 	return string(respBody), nil
 }
 
+type MediaItem struct {
+	BotID      string    `bson:"bot_id" json:"bot_id"`
+	ChatID     string    `bson:"chat_id" json:"chat_id"`
+	MessageID  string    `bson:"message_id" json:"message_id"`
+	Kind       string    `bson:"kind" json:"kind"` // image/audio/video/file/sticker
+	Mime       string    `bson:"mime" json:"mime"`
+	Content    string    `bson:"content" json:"content"` // base64 data:... OR url
+	Size       int       `bson:"size" json:"size"`
+	CreatedAt  time.Time `bson:"created_at" json:"created_at"`
+}
 // 🔥 HELPER: Save Message to Mongo (Fixed Context)
-// 🔥 HELPER: Save Message to Mongo (100% Fixed for Latest Version)
 func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waProto.Message, isFromMe bool, ts uint64) {
-	// 🛡️ Safety: Prevent Crash if something goes wrong
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Printf("⚠️ Recovered from mongo save: %v\n", r)
 		}
 	}()
 
-	if chatHistoryCollection == nil { return }
+	if chatHistoryCollection == nil {
+		return
+	}
+
+	// ✅ Generate a stable-ish message id (best: pass real Info.ID later)
+	messageID := uuid.NewString()
 
 	var msgType, content, senderName string
 	var quotedMsg, quotedSender string
 	var isSticker bool
 
+	// IMPORTANT: keep timestamp as time.Time (matches your ChatMessage struct + HTML new Date(...))
 	timestamp := time.Unix(int64(ts), 0)
+
 	isGroup := strings.Contains(chatID, "@g.us")
 	isChannel := strings.Contains(chatID, "@newsletter")
+	isStatus := chatID == "status@broadcast" // common WA status chat
 
 	jid, _ := types.ParseJID(chatID)
 
-	// ✅ 1. Name Lookup (Compatible with Latest Version)
+	// ✅ Name lookup (latest whatsmeow needs context)
 	if isGroup {
-		// New version requires Context
 		if info, err := client.GetGroupInfo(context.Background(), jid); err == nil {
-			senderName = info.Name
+			// group name (not sender name). For group sender name, later use event.Info.Sender.
+			if info.Name != "" {
+				senderName = info.Name
+			}
 		}
 	}
 
 	if senderName == "" {
-		// New version requires Context
 		if contact, err := client.Store.Contacts.GetContact(context.Background(), jid); err == nil && contact.Found {
 			senderName = contact.FullName
-			if senderName == "" { senderName = contact.PushName }
-		} else {
-			if contact, err := client.Store.Contacts.GetContact(context.Background(), jid); err == nil {
+			if senderName == "" {
 				senderName = contact.PushName
 			}
 		}
 	}
-	
-	if senderName == "" { senderName = strings.Split(chatID, "@")[0] }
+	if senderName == "" {
+		senderName = strings.Split(chatID, "@")[0]
+	}
 
-	// ✅ 2. Handle Replies (Fixed Pointer & Field Names)
+	// ✅ Reply handling (safe pointers)
 	var contextInfo *waProto.ContextInfo
-	if msg.ExtendedTextMessage != nil { contextInfo = msg.ExtendedTextMessage.ContextInfo }
-	if msg.ImageMessage != nil { contextInfo = msg.ImageMessage.ContextInfo }
-	if msg.VideoMessage != nil { contextInfo = msg.VideoMessage.ContextInfo }
-	if msg.AudioMessage != nil { contextInfo = msg.AudioMessage.ContextInfo }
-	if msg.StickerMessage != nil { contextInfo = msg.StickerMessage.ContextInfo }
+	if msg.ExtendedTextMessage != nil {
+		contextInfo = msg.ExtendedTextMessage.ContextInfo
+	}
+	if msg.ImageMessage != nil {
+		contextInfo = msg.ImageMessage.ContextInfo
+	}
+	if msg.VideoMessage != nil {
+		contextInfo = msg.VideoMessage.ContextInfo
+	}
+	if msg.AudioMessage != nil {
+		contextInfo = msg.AudioMessage.ContextInfo
+	}
+	if msg.StickerMessage != nil {
+		contextInfo = msg.StickerMessage.ContextInfo
+	}
+	if msg.DocumentMessage != nil {
+		contextInfo = msg.DocumentMessage.ContextInfo
+	}
 
 	if contextInfo != nil && contextInfo.QuotedMessage != nil {
-		// ✅ Fix Pointer Dereference (Participant is *string)
 		if contextInfo.Participant != nil {
 			quotedSender = *contextInfo.Participant
-		} else if contextInfo.StanzaID != nil { // ✅ Fix: StanzaID is *string
-			quotedSender = *contextInfo.StanzaID
 		}
-		
 		if contextInfo.QuotedMessage.Conversation != nil {
 			quotedMsg = *contextInfo.QuotedMessage.Conversation
-		} else if contextInfo.QuotedMessage.ExtendedTextMessage != nil {
+		} else if contextInfo.QuotedMessage.ExtendedTextMessage != nil && contextInfo.QuotedMessage.ExtendedTextMessage.Text != nil {
 			quotedMsg = *contextInfo.QuotedMessage.ExtendedTextMessage.Text
 		} else {
 			quotedMsg = "Replying..."
 		}
 	}
 
-	// ✅ 3. Media Handling (With Context)
+	// ✅ Lightweight message content + Media stored separately
+	// Rule:
+	// - messages collection: content is TEXT or "MEDIA_WAITING"
+	// - media collection: actual base64/url stored by message_id
+	var mediaToSave *MediaItem
+
 	if txt := getText(msg); txt != "" {
 		msgType = "text"
 		content = txt
 	} else if msg.ImageMessage != nil {
 		msgType = "image"
+		content = "MEDIA_WAITING"
+
+		// download now (simple). Later we can change to on-demand by storing proto.
 		data, err := client.Download(context.Background(), msg.ImageMessage)
-		if err == nil {
+		if err == nil && len(data) > 0 && mediaCollection != nil {
 			encoded := base64.StdEncoding.EncodeToString(data)
-			content = "data:image/jpeg;base64," + encoded
+			mediaToSave = &MediaItem{
+				BotID:     botID,
+				ChatID:    chatID,
+				MessageID: messageID,
+				Kind:      "image",
+				Mime:      "image/jpeg",
+				Content:   "data:image/jpeg;base64," + encoded,
+				Size:      len(data),
+				CreatedAt: time.Now(),
+			}
 		}
 	} else if msg.StickerMessage != nil {
 		msgType = "image"
 		isSticker = true
+		content = "MEDIA_WAITING"
+
 		data, err := client.Download(context.Background(), msg.StickerMessage)
-		if err == nil {
+		if err == nil && len(data) > 0 && mediaCollection != nil {
 			encoded := base64.StdEncoding.EncodeToString(data)
-			content = "data:image/webp;base64," + encoded
-		}
-	} else if msg.VideoMessage != nil {
-		msgType = "video"
-		data, err := client.Download(context.Background(), msg.VideoMessage)
-		if err == nil {
-			url, err := UploadToCatbox(data, "video.mp4")
-			if err == nil { content = url }
+			mediaToSave = &MediaItem{
+				BotID:     botID,
+				ChatID:    chatID,
+				MessageID: messageID,
+				Kind:      "sticker",
+				Mime:      "image/webp",
+				Content:   "data:image/webp;base64," + encoded,
+				Size:      len(data),
+				CreatedAt: time.Now(),
+			}
 		}
 	} else if msg.AudioMessage != nil {
 		msgType = "audio"
+		content = "MEDIA_WAITING"
+
 		data, err := client.Download(context.Background(), msg.AudioMessage)
-		if err == nil {
+		if err == nil && len(data) > 0 && mediaCollection != nil {
+			// keep small as base64, large as catbox url
 			if len(data) > 10*1024*1024 {
 				url, err := UploadToCatbox(data, "audio.ogg")
-				if err == nil { content = url }
+				if err == nil && url != "" {
+					mediaToSave = &MediaItem{
+						BotID:     botID,
+						ChatID:    chatID,
+						MessageID: messageID,
+						Kind:      "audio",
+						Mime:      "audio/ogg",
+						Content:   url,
+						Size:      len(data),
+						CreatedAt: time.Now(),
+					}
+				}
 			} else {
 				encoded := base64.StdEncoding.EncodeToString(data)
-				content = "data:audio/ogg;base64," + encoded
+				mediaToSave = &MediaItem{
+					BotID:     botID,
+					ChatID:    chatID,
+					MessageID: messageID,
+					Kind:      "audio",
+					Mime:      "audio/ogg",
+					Content:   "data:audio/ogg;base64," + encoded,
+					Size:      len(data),
+					CreatedAt: time.Now(),
+				}
+			}
+		}
+	} else if msg.VideoMessage != nil {
+		msgType = "video"
+		content = "MEDIA_WAITING"
+
+		data, err := client.Download(context.Background(), msg.VideoMessage)
+		if err == nil && len(data) > 0 && mediaCollection != nil {
+			// videos usually large -> url
+			url, err := UploadToCatbox(data, "video.mp4")
+			if err == nil && url != "" {
+				mediaToSave = &MediaItem{
+					BotID:     botID,
+					ChatID:    chatID,
+					MessageID: messageID,
+					Kind:      "video",
+					Mime:      "video/mp4",
+					Content:   url,
+					Size:      len(data),
+					CreatedAt: time.Now(),
+				}
 			}
 		}
 	} else if msg.DocumentMessage != nil {
 		msgType = "file"
+		content = "MEDIA_WAITING"
+
 		data, err := client.Download(context.Background(), msg.DocumentMessage)
-		if err == nil {
+		if err == nil && len(data) > 0 && mediaCollection != nil {
 			fname := msg.DocumentMessage.GetFileName()
-			if fname == "" { fname = "file.bin" }
+			if fname == "" {
+				fname = "file.bin"
+			}
 			url, err := UploadToCatbox(data, fname)
-			if err == nil { content = url }
+			if err == nil && url != "" {
+				mediaToSave = &MediaItem{
+					BotID:     botID,
+					ChatID:    chatID,
+					MessageID: messageID,
+					Kind:      "file",
+					Mime:      msg.DocumentMessage.GetMimetype(),
+					Content:   url,
+					Size:      len(data),
+					CreatedAt: time.Now(),
+				}
+			}
 		}
 	} else {
-		return 
+		return
 	}
 
-	if content == "" { return }
+	// if media download failed but it is a media message -> keep message saved as waiting (UI shows download icon later)
+	if content == "" {
+		return
+	}
 
+	// ✅ Save ChatMessage (lightweight)
 	doc := ChatMessage{
 		BotID:        botID,
 		ChatID:       chatID,
-		Sender:       chatID,
-		SenderName:   senderName,
-		Type:         msgType,
-		Content:      content,
-		IsFromMe:     isFromMe,
+		Sender:       chatID,        // later: real sender from event.Info.Sender
+		SenderName:   senderName,    // ok for now
+		MessageID:    messageID,
 		Timestamp:    timestamp,
+		Type:         msgType,
+		Content:      content,       // TEXT or MEDIA_WAITING
+		IsFromMe:     isFromMe,
 		IsGroup:      isGroup,
 		IsChannel:    isChannel,
-		IsSticker:    isSticker,
 		QuotedMsg:    quotedMsg,
 		QuotedSender: quotedSender,
+		IsSticker:    isSticker,
 	}
 
 	_, err := chatHistoryCollection.InsertOne(context.Background(), doc)
 	if err != nil {
 		fmt.Printf("❌ Mongo Save Error: %v\n", err)
+		return
+	}
+
+	// ✅ Save Media separately (if present)
+	if mediaToSave != nil && mediaCollection != nil {
+		_, mErr := mediaCollection.InsertOne(context.Background(), mediaToSave)
+		if mErr != nil {
+			fmt.Printf("❌ Mongo Media Save Error: %v\n", mErr)
+		}
+	}
+
+	// ✅ Optional: Save Status separately (so HTML can show statuses later)
+	if isStatus && statusCollection != nil {
+		// Reuse ChatMessage schema in statuses too (simple)
+		_, sErr := statusCollection.InsertOne(context.Background(), doc)
+		if sErr != nil {
+			fmt.Printf("❌ Mongo Status Save Error: %v\n", sErr)
+		}
 	}
 }
 
@@ -982,30 +1243,164 @@ func handleGetMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "MongoDB not connected", 500)
 		return
 	}
+
 	botID := r.URL.Query().Get("bot_id")
 	chatID := r.URL.Query().Get("chat_id")
+	if botID == "" || chatID == "" {
+		http.Error(w, "bot_id and chat_id are required", 400)
+		return
+	}
 
-	filter := bson.M{"bot_id": botID, "chat_id": chatID}
-	opts := options.Find().SetSort(bson.D{{Key: "timestamp", Value: 1}})
+	// ----------------------------
+	// Query params
+	// ----------------------------
+	// limit=80 (default)
+	limit := int64(80)
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.ParseInt(l, 10, 64); err == nil {
+			if parsed < 1 {
+				parsed = 1
+			}
+			if parsed > 300 {
+				parsed = 300 // hard cap to protect DB
+			}
+			limit = parsed
+		}
+	}
 
-	cursor, err := chatHistoryCollection.Find(context.Background(), filter, opts)
+	// before=<unix_ms>  -> get older messages (DESC limit) then reverse to ASC
+	beforeStr := r.URL.Query().Get("before")
+
+	// after_ts=<unix_ms> -> get only newer messages for polling
+	afterStr := r.URL.Query().Get("after_ts")
+
+	// ----------------------------
+	// Build filter
+	// ----------------------------
+	filter := bson.M{
+		"bot_id":  botID,
+		"chat_id": chatID,
+	}
+
+	// NOTE:
+	// We assume `timestamp` in Mongo is numeric unix ms (int64) OR BSON Date.
+	// If it's BSON Date, pass Date in query from frontend OR convert here.
+	// For now, we'll treat it as int64 unix ms. (works if stored as int64)
+	if afterStr != "" {
+		if afterTS, err := strconv.ParseInt(afterStr, 10, 64); err == nil {
+			filter["timestamp"] = bson.M{"$gt": afterTS}
+		}
+	}
+
+	// If before is provided, it is used for pagination to fetch older messages.
+	// It should NOT be combined with after_ts in normal usage.
+	descMode := false
+	if beforeStr != "" {
+		if beforeTS, err := strconv.ParseInt(beforeStr, 10, 64); err == nil {
+			// older than beforeTS
+			// if after_ts already applied, keep it; else overwrite timestamp filter
+			if existing, ok := filter["timestamp"].(bson.M); ok {
+				existing["$lt"] = beforeTS
+				filter["timestamp"] = existing
+			} else {
+				filter["timestamp"] = bson.M{"$lt": beforeTS}
+			}
+			// For "before", we fetch DESC to get newest of the older chunk, then reverse.
+			descMode = true
+		}
+	}
+
+	// ----------------------------
+	// Find options
+	// ----------------------------
+	opts := options.Find().SetLimit(limit)
+
+	if descMode {
+		opts.SetSort(bson.D{{Key: "timestamp", Value: -1}})
+	} else {
+		opts.SetSort(bson.D{{Key: "timestamp", Value: 1}})
+	}
+
+	// ----------------------------
+	// Query DB
+	// ----------------------------
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	cursor, err := chatHistoryCollection.Find(ctx, filter, opts)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	defer cursor.Close(ctx)
 
 	var messages []ChatMessage
-	if err = cursor.All(context.Background(), &messages); err != nil {
+	if err = cursor.All(ctx, &messages); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 
-	// 🚀 NOTE: Base64 Masking Removed.
-	// Now sending full media immediately to fix "Spinning" issue.
-	// Frontend will cache this to IndexedDB to save bandwidth on next reload.
+	// If fetched DESC (for before pagination), reverse to ASC for UI consistency
+	if descMode && len(messages) > 1 {
+		for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+			messages[i], messages[j] = messages[j], messages[i]
+		}
+	}
 
+	// ----------------------------
+	// Pagination cursor hint
+	// ----------------------------
+	var nextBeforeTS *int64
+	if len(messages) > 0 {
+		// earliest msg timestamp for next "before" call
+		// (frontend can call before=<this> to load older)
+		earliest := extractTimestamp(messages[0])
+		nextBeforeTS = &earliest
+	}
+
+	// ----------------------------
+	// Response
+	// ----------------------------
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(messages)
+
+	// Backward compatible:
+	// - If you want old frontend to still work (expects array), return array directly when no cursor requested.
+	// Better for your new UI:
+	// - return object with data + cursor
+	// We'll return object ALWAYS (more future-proof).
+	resp := map[string]any{
+		"messages":        messages,
+		"next_before_ts":  nextBeforeTS,
+		"count":           len(messages),
+		"bot_id":          botID,
+		"chat_id":         chatID,
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// helper: extract timestamp as int64
+// If your ChatMessage has Timestamp field as int64 already, use that.
+// If it is time.Time, convert to UnixMilli.
+// If it is string, you should fix schema or parse.
+func extractTimestamp(m ChatMessage) int64 {
+	// ✅ adjust according to your struct
+	// common patterns:
+	// - m.Timestamp int64
+	// - m.Timestamp time.Time
+	// - m.Timestamp string (NOT recommended)
+	switch any(m.Timestamp).(type) {
+	case int64:
+		return m.Timestamp
+	case int:
+		return int64(m.Timestamp)
+	default:
+		// if Timestamp is time.Time
+		if t, ok := any(m.Timestamp).(time.Time); ok {
+			return t.UnixMilli()
+		}
+		// fallback: now
+		return time.Now().UnixMilli()
+	}
 }
 
 func handleGetMedia(w http.ResponseWriter, r *http.Request) {
