@@ -37,67 +37,52 @@ var AuthorizedBots = map[string]bool{
 // ہٹا دیئے گئے ہیں کیونکہ وہ اب صرف main.go میں ایک ہی بار ڈیفائن ہوں گے۔
 
 func handler(botClient *whatsmeow.Client, evt interface{}) {
-	// 🛡️ سیف گارڈ: کریش روکنے کے لیے
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Printf("⚠️ [CRASH PREVENTED] Bot %s error: %v\n", botClient.Store.ID.User, r)
 		}
 	}()
 
-	if botClient == nil {
-		return
-	}
+	if botClient == nil { return }
 
-	// ⚡ فیچرز (اینٹی لنک، ویلکم وغیرہ) کو بیک گراؤنڈ میں سنیں
+	// Listen for features in background
 	go ListenForFeatures(botClient, evt)
 
 	switch v := evt.(type) {
 
 	case *events.Message:
-		// 🔥 ٹائم فلٹر: 1 منٹ سے پرانے میسجز پر کمانڈز نہ چلائیں
-		// لیکن ڈیٹا بیس میں سیو کرنے کے لیے یہ فلٹر نہ لگائیں تاکہ ہسٹری مکمل رہے
+		// Filter old messages for COMMANDS only (keep history saving for all)
 		isRecent := time.Since(v.Info.Timestamp) < 1*time.Minute
 
-		// 🚫 اسٹیٹس اپڈیٹس کو اگنور کریں
-		if v.Info.Chat.String() == "status@broadcast" {
-			return
-		}
+		if v.Info.Chat.String() == "status@broadcast" { return }
 
-		// 🍃 [MONGO] Save Live Message (Text, Media, Stickers) to Database
+		// ✅ Save Message to Mongo (Background)
 		go func() {
 			botID := getCleanID(botClient.Store.ID.User)
 			saveMessageToMongo(botClient, botID, v.Info.Chat.String(), v.Message, v.Info.IsFromMe, uint64(v.Info.Timestamp.Unix()))
 		}()
 
-		// ✅ کمانڈز صرف تب چلائیں جب میسج نیا ہو
+		// Process Commands
 		if isRecent {
 			go processMessage(botClient, v)
 		}
 
-	// 🔥🔥🔥 [FIXED] ہسٹری سنک (پرانی چیٹس لوڈ کرنا) 🔥🔥🔥
 	case *events.HistorySync:
 		go func() {
-			if v.Data == nil || len(v.Data.Conversations) == 0 {
-				return
-			}
+			if v.Data == nil || len(v.Data.Conversations) == 0 { return }
 
 			botID := getCleanID(botClient.Store.ID.User)
-			// fmt.Printf("📜 [HISTORY] Syncing %d conversations for %s...\n", len(v.Data.Conversations), botID)
-
 			for _, conv := range v.Data.Conversations {
-				// ✅ FIX: conv.ID ایک سٹرنگ ہے، اسے براہ راست استعمال کریں
-				chatID := conv.ID
+				// ✅ FIX: Conversation ID is string in latest version
+				chatID := conv.ID 
 
 				for _, histMsg := range conv.Messages {
 					webMsg := histMsg.Message
-					if webMsg == nil || webMsg.Message == nil {
-						continue
-					}
+					if webMsg == nil || webMsg.Message == nil { continue }
 
-					// ✅ FIX: Dereference pointers safely
 					isFromMe := false
 					if webMsg.Key != nil && webMsg.Key.FromMe != nil {
-						isFromMe = *webMsg.Key.FromMe
+						isFromMe = *webMsg.Key.FromMe // Dereference bool pointer
 					}
 
 					ts := uint64(0)
@@ -105,7 +90,6 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 						ts = *webMsg.MessageTimestamp
 					}
 
-					// ✅ Save History Message
 					saveMessageToMongo(botClient, botID, chatID, webMsg.Message, isFromMe, ts)
 				}
 			}
@@ -114,11 +98,6 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 	case *events.Connected:
 		if botClient.Store.ID != nil {
 			fmt.Printf("🟢 [ONLINE] Bot %s connected!\n", botClient.Store.ID.User)
-		}
-
-	case *events.LoggedOut:
-		if botClient.Store.ID != nil {
-			fmt.Printf("🔴 [LOGGED OUT] Bot %s\n", botClient.Store.ID.User)
 		}
 	}
 }

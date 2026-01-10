@@ -287,14 +287,12 @@ func UploadToCatbox(data []byte, filename string) (string, error) {
 }
 
 // 🔥 HELPER: Save Message to Mongo (Fixed Context)
-// 🔥 HELPER: Save Message to Mongo (Fixed Types & Group Names)
-// 🔥 HELPER: Save Message to Mongo (Fixed for Latest Whatsmeow)
-// 🔥 HELPER: Save Message to Mongo (Crash-Proof & Sticker Fixed)
+// 🔥 HELPER: Save Message to Mongo (100% Fixed for Latest Version)
 func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waProto.Message, isFromMe bool, ts uint64) {
-	// 🛡️ Safety: Prevent Crash
+	// 🛡️ Safety: Prevent Crash if something goes wrong
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("⚠️ Recovered from panic in saveMessage: %v\n", r)
+			fmt.Printf("⚠️ Recovered from mongo save: %v\n", r)
 		}
 	}()
 
@@ -310,27 +308,29 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waP
 
 	jid, _ := types.ParseJID(chatID)
 
-	// 1. Name Lookup (Safe Mode)
+	// ✅ 1. Name Lookup (Compatible with Latest Version)
 	if isGroup {
-		// Try fetching group name (Ignore errors)
-		if info, err := client.GetGroupInfo(jid); err == nil {
+		// New version requires Context
+		if info, err := client.GetGroupInfo(context.Background(), jid); err == nil {
 			senderName = info.Name
 		}
 	}
+
 	if senderName == "" {
-		// Try contact store
-		if contact, err := client.Store.Contacts.GetContact(jid); err == nil {
-			if contact.Found {
-				senderName = contact.FullName
-				if senderName == "" { senderName = contact.PushName }
-			} else {
+		// New version requires Context
+		if contact, err := client.Store.Contacts.GetContact(context.Background(), jid); err == nil && contact.Found {
+			senderName = contact.FullName
+			if senderName == "" { senderName = contact.PushName }
+		} else {
+			if contact, err := client.Store.Contacts.GetContact(context.Background(), jid); err == nil {
 				senderName = contact.PushName
 			}
 		}
 	}
+	
 	if senderName == "" { senderName = strings.Split(chatID, "@")[0] }
 
-	// 2. Handle Replies (Pointer Safe)
+	// ✅ 2. Handle Replies (Fixed Pointer & Field Names)
 	var contextInfo *waProto.ContextInfo
 	if msg.ExtendedTextMessage != nil { contextInfo = msg.ExtendedTextMessage.ContextInfo }
 	if msg.ImageMessage != nil { contextInfo = msg.ImageMessage.ContextInfo }
@@ -339,9 +339,10 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waP
 	if msg.StickerMessage != nil { contextInfo = msg.StickerMessage.ContextInfo }
 
 	if contextInfo != nil && contextInfo.QuotedMessage != nil {
+		// ✅ Fix Pointer Dereference (Participant is *string)
 		if contextInfo.Participant != nil {
 			quotedSender = *contextInfo.Participant
-		} else if contextInfo.StanzaID != nil {
+		} else if contextInfo.StanzaID != nil { // ✅ Fix: StanzaID is *string
 			quotedSender = *contextInfo.StanzaID
 		}
 		
@@ -354,37 +355,35 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waP
 		}
 	}
 
-	// 3. Media Handling (Sticker Support Added)
+	// ✅ 3. Media Handling (With Context)
 	if txt := getText(msg); txt != "" {
 		msgType = "text"
 		content = txt
 	} else if msg.ImageMessage != nil {
 		msgType = "image"
-		data, err := client.Download(msg.ImageMessage)
+		data, err := client.Download(context.Background(), msg.ImageMessage)
 		if err == nil {
 			encoded := base64.StdEncoding.EncodeToString(data)
 			content = "data:image/jpeg;base64," + encoded
 		}
 	} else if msg.StickerMessage != nil {
-		// ✅ STICKER FIX
-		msgType = "image" // Frontend will handle it as image class but distinct
+		msgType = "image"
 		isSticker = true
-		data, err := client.Download(msg.StickerMessage)
+		data, err := client.Download(context.Background(), msg.StickerMessage)
 		if err == nil {
 			encoded := base64.StdEncoding.EncodeToString(data)
-			// Stickers are usually WebP
 			content = "data:image/webp;base64," + encoded
 		}
 	} else if msg.VideoMessage != nil {
 		msgType = "video"
-		data, err := client.Download(msg.VideoMessage)
+		data, err := client.Download(context.Background(), msg.VideoMessage)
 		if err == nil {
 			url, err := UploadToCatbox(data, "video.mp4")
 			if err == nil { content = url }
 		}
 	} else if msg.AudioMessage != nil {
 		msgType = "audio"
-		data, err := client.Download(msg.AudioMessage)
+		data, err := client.Download(context.Background(), msg.AudioMessage)
 		if err == nil {
 			if len(data) > 10*1024*1024 {
 				url, err := UploadToCatbox(data, "audio.ogg")
@@ -396,7 +395,7 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waP
 		}
 	} else if msg.DocumentMessage != nil {
 		msgType = "file"
-		data, err := client.Download(msg.DocumentMessage)
+		data, err := client.Download(context.Background(), msg.DocumentMessage)
 		if err == nil {
 			fname := msg.DocumentMessage.GetFileName()
 			if fname == "" { fname = "file.bin" }
@@ -420,7 +419,7 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waP
 		Timestamp:    timestamp,
 		IsGroup:      isGroup,
 		IsChannel:    isChannel,
-		IsSticker:    isSticker, // ✅ Saving Sticker Flag
+		IsSticker:    isSticker,
 		QuotedMsg:    quotedMsg,
 		QuotedSender: quotedSender,
 	}
