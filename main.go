@@ -17,8 +17,12 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"image"
+	"image/jpeg"
+	_ "image/png"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/image/draw"
 	_ "github.com/lib/pq"            // Postgres
 	_ "github.com/go-sql-driver/mysql" // ✅ Added MySQL Driver
 	"github.com/redis/go-redis/v9"
@@ -636,87 +640,126 @@ func handleGetStatuses(w http.ResponseWriter, r *http.Request) {
 }
 
 // 🚀 8. Update Profile (Fixed Picture Upload)
+
+// prepareAvatarJPEG makes sure avatar is JPEG and max 640px (WhatsApp often rejects bigger).
+func prepareAvatarJPEG(input []byte) ([]byte, error) {
+	img, _, err := image.Decode(bytes.NewReader(input))
+	if err != nil {
+		return nil, fmt.Errorf("invalid image: %w", err)
+	}
+
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+
+	// Resize if bigger than 640x640 (keep aspect ratio)
+	if w > 640 || h > 640 {
+		scaleW := float64(640) / float64(w)
+		scaleH := float64(640) / float64(h)
+		scale := scaleW
+		if scaleH < scale {
+			scale = scaleH
+		}
+
+		nw := int(float64(w) * scale)
+		nh := int(float64(h) * scale)
+		if nw < 1 {
+			nw = 1
+		}
+		if nh < 1 {
+			nh = 1
+		}
+
+		dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
+		draw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Over, nil)
+		img = dst
+	}
+
+	var buf bytes.Buffer
+	// Encode to JPEG (WhatsApp commonly expects JPEG here)
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 85}); err != nil {
+		return nil, fmt.Errorf("jpeg encode failed: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	// Parse Multipart Form (10MB Max)
-	err := r.ParseMultipartForm(10 << 20)
-	if err != nil {
-		http.Error(w, "File too big", 400)
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		http.Error(w, "File too big", http.StatusBadRequest)
 		return
 	}
 
 	botID := r.FormValue("bot_id")
 	action := r.FormValue("action") // "picture" or "status"
-	
+
 	clientsMutex.RLock()
 	bot, ok := activeClients[botID]
 	clientsMutex.RUnlock()
-	
+
 	if !ok {
-		http.Error(w, "Bot offline", 404)
+		http.Error(w, "Bot offline", http.StatusNotFound)
 		return
 	}
 
-	// 1. Update Status (About)
+	ctx := context.Background()
+
+	// 1) Update Status (About)
 	if action == "status" {
-		newStatus := r.FormValue("text")
-		err := bot.SetStatusMessage(context.Background(), newStatus)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
+		newStatus := strings.TrimSpace(r.FormValue("text"))
+		if newStatus == "" {
+			http.Error(w, "text is required", http.StatusBadRequest)
 			return
 		}
-		w.Write([]byte(`{"status":"updated_text"}`))
+		if err := bot.SetStatusMessage(ctx, newStatus); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "updated_text"})
 		return
 	}
 
-	// 2. Update Profile Picture (DP)
+	// 2) Update Profile Picture (DP)
 	if action == "picture" {
+		if bot.Store.ID == nil || !bot.IsLoggedIn() {
+			http.Error(w, "Bot not logged in", http.StatusBadRequest)
+			return
+		}
+
 		file, _, err := r.FormFile("file")
 		if err != nil {
-			http.Error(w, "File error", 400)
+			http.Error(w, "File error", http.StatusBadRequest)
 			return
 		}
 		defer file.Close()
-		
-		imgData, err := io.ReadAll(file)
+
+		raw, err := io.ReadAll(file)
 		if err != nil {
-			http.Error(w, "Read error", 500)
+			http.Error(w, "Read error", http.StatusInternalServerError)
 			return
 		}
 
-		if bot.Store.ID == nil {
-			http.Error(w, "Bot not logged in", 400)
-			return
-		}
-
-		// ✅ LATEST LOGIC: SetProfilePicture
-		// JID کے ساتھ * لگانا ضروری ہے کیونکہ Store.ID ایک Pointer ہے
-		// اور فنکشن کو Value چاہیے ہوتی ہے۔
-		id, err := bot.SetProfilePicture(context.Background(), *bot.Store.ID, imgData)
-		
-		if err != nil { 
-			fmt.Printf("❌ Profile Pic Error: %v\n", err)
-			
-			// 🛠️ FALLBACK: اگر SetProfilePicture فیل ہو جائے (کچھ ورژنز میں)،
-			// تو ہم SetGroupPhoto استعمال کر سکتے ہیں (یہ بھی وہی کام کرتا ہے)
-			// اگر اوپر والا کوڈ چلے تو یہ نہیں چلے گا، یہ صرف بیک اپ ہے۔
-			if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
-				fmt.Println("⚠️ Trying Fallback: SetGroupPhoto for Self...")
-				id, err = bot.SetGroupPhoto(context.Background(), *bot.Store.ID, imgData)
-			}
-		}
-
+		avatarJPEG, err := prepareAvatarJPEG(raw)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		
-		// Success Response
+
+		// ✅ WhatsMeow: own profile picture is SetGroupPhoto with EMPTY JID
+		// (not SetProfilePicture)
+		picID, err := bot.SetGroupPhoto(ctx, types.EmptyJID, avatarJPEG)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
 		json.NewEncoder(w).Encode(map[string]string{
-			"status": "updated_picture", 
-			"id": id,
+			"status": "updated_picture",
+			"id":     picID,
 		})
 		return
 	}
+
+	http.Error(w, "Invalid action (use: status|picture)", http.StatusBadRequest)
 }
 
 func handleContactInfo(w http.ResponseWriter, r *http.Request) {
