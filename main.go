@@ -909,8 +909,8 @@ func handleGetChats(w http.ResponseWriter, r *http.Request) {
 		// Final Fallback
 		if cleanName == "" {
 			if chatType == "group" { cleanName = "Unknown Group" }
-			else if chatType == "channel" { cleanName = "Unknown Channel" }
-			else { cleanName = "+" + strings.Split(chatID, "@")[0] }
+			else if chatType == "channel" { cleanName = "Unknown Channel" 
+			} else { cleanName = "+" + strings.Split(chatID, "@")[0] }
 		}
 
 		// Use fetched Avatar if available, else send ID for frontend to fetch later
