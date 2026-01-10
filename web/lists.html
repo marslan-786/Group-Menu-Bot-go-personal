@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot Archive Viewer</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; display: flex; height: 100vh; background: #d1d7db; }
+        
+        /* Sidebar */
+        .sidebar { width: 30%; background: #fff; border-right: 1px solid #ddd; display: flex; flex-direction: column; }
+        .header { background: #00a884; color: white; padding: 15px; font-weight: bold; }
+        .list-container { flex: 1; overflow-y: auto; }
+        .list-item { padding: 15px; border-bottom: 1px solid #f0f0f0; cursor: pointer; display: flex; justify-content: space-between; }
+        .list-item:hover { background: #f5f5f5; }
+        .list-item.active { background: #e9edef; }
+
+        /* Chat Area */
+        .chat-area { flex: 1; display: flex; flex-direction: column; background: #efeae2; }
+        .chat-header { background: #f0f2f5; padding: 10px 20px; border-bottom: 1px solid #ddd; font-weight: bold; }
+        .messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        
+        /* Message Bubbles */
+        .msg { max-width: 60%; padding: 10px; border-radius: 8px; font-size: 14px; position: relative; word-wrap: break-word; }
+        .msg.sent { align-self: flex-end; background: #d9fdd3; }
+        .msg.received { align-self: flex-start; background: #fff; }
+        .time { font-size: 10px; color: #666; text-align: right; margin-top: 5px; }
+
+        /* Media */
+        video, img { max-width: 100%; border-radius: 5px; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <div class="header" id="sidebar-title">Select Session</div>
+        <div class="list-container" id="list-box">
+            </div>
+    </div>
+
+    <div class="chat-area">
+        <div class="chat-header" id="chat-header">Select a chat to view history</div>
+        <div class="messages" id="messages-box"></div>
+    </div>
+
+    <script>
+        let currentBot = null;
+        let currentChat = null;
+
+        // 1. Load Sessions on Start
+        fetch('/api/sessions')
+            .then(res => res.json())
+            .then(sessions => {
+                const list = document.getElementById('list-box');
+                document.getElementById('sidebar-title').innerText = "Active Sessions (" + sessions.length + ")";
+                
+                sessions.forEach(num => {
+                    let div = document.createElement('div');
+                    div.className = 'list-item';
+                    div.innerText = "🤖 " + num;
+                    div.onclick = () => loadChats(num);
+                    list.appendChild(div);
+                });
+            });
+
+        // 2. Load Chats for a Bot
+        function loadChats(botID) {
+            currentBot = botID;
+            document.getElementById('sidebar-title').innerText = "Chats for " + botID;
+            const list = document.getElementById('list-box');
+            list.innerHTML = '<div style="padding:10px;">Loading chats...</div>';
+
+            fetch(`/api/chats?bot_id=${botID}`)
+                .then(res => res.json())
+                .then(chats => {
+                    list.innerHTML = '';
+                    // Back Button
+                    let back = document.createElement('div');
+                    back.className = 'list-item';
+                    back.style.background = '#ddd';
+                    back.innerText = "⬅ Back to Sessions";
+                    back.onclick = () => location.reload();
+                    list.appendChild(back);
+
+                    chats.forEach(chatID => {
+                        let div = document.createElement('div');
+                        div.className = 'list-item';
+                        div.innerText = chatID.split('@')[0]; // Clean ID
+                        div.onclick = () => loadMessages(botID, chatID);
+                        list.appendChild(div);
+                    });
+                });
+        }
+
+        // 3. Load Messages
+        function loadMessages(botID, chatID) {
+            currentChat = chatID;
+            document.getElementById('chat-header').innerText = chatID;
+            const msgBox = document.getElementById('messages-box');
+            msgBox.innerHTML = 'Loading...';
+
+            fetch(`/api/messages?bot_id=${botID}&chat_id=${chatID}`)
+                .then(res => res.json())
+                .then(msgs => {
+                    msgBox.innerHTML = '';
+                    if(!msgs) return;
+
+                    msgs.forEach(m => {
+                        let div = document.createElement('div');
+                        div.className = 'msg ' + (m.is_from_me ? 'sent' : 'received');
+
+                        let content = '';
+                        if(m.type === 'text') {
+                            content = m.content;
+                        } else if (m.type === 'video') {
+                            // Video Player for Catbox Link
+                            content = `<video src="${m.content}" controls></video>`;
+                        } else if (m.type === 'file') {
+                            content = `<a href="${m.content}" target="_blank">📄 Download File</a>`;
+                        } else if (m.type === 'image') {
+                            content = `📷 ${m.content}`;
+                        }
+
+                        let date = new Date(m.timestamp).toLocaleString();
+                        div.innerHTML = `<div>${content}</div><div class="time">${date}</div>`;
+                        msgBox.appendChild(div);
+                    });
+                    msgBox.scrollTop = msgBox.scrollHeight; // Auto scroll to bottom
+                });
+        }
+    </script>
+</body>
+</html>
