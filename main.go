@@ -17,6 +17,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"strconv"
 
 	"github.com/gorilla/websocket"
 	_ "github.com/lib/pq"            // Postgres
@@ -28,7 +29,7 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
-
+	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -37,7 +38,7 @@ import (
 // 📦 STRUCT FOR MESSAGE HISTORY
 // 📦 STRUCT FOR MESSAGE HISTORY (Compatible with MongoDB & MySQL)
 type ChatMessage struct {
-	ID           int64     `bson:"-" json:"id"` // Added for MySQL
+	ID           int64     `bson:"-" json:"id"`
 	BotID        string    `bson:"bot_id" json:"bot_id"`
 	ChatID       string    `bson:"chat_id" json:"chat_id"`
 	Sender       string    `bson:"sender" json:"sender"`
@@ -52,6 +53,9 @@ type ChatMessage struct {
 	QuotedMsg    string    `bson:"quoted_msg" json:"quoted_msg"`
 	QuotedSender string    `bson:"quoted_sender" json:"quoted_sender"`
 	IsSticker    bool      `bson:"is_sticker" json:"is_sticker"`
+
+	HasMedia bool   `bson:"has_media,omitempty" json:"has_media,omitempty"`
+	MediaRef string `bson:"media_ref,omitempty" json:"media_ref,omitempty"` // usually same as message_id
 }
 
 // 📦 Chat Item Structure
@@ -183,56 +187,65 @@ func main() {
 
 				fmt.Println("🍃 [MONGODB] Connected for Chat History + Media + Status!")
 
-				// ✅ Ensure indexes (speed + duplicates protection)
+				// ✅ Ensure indexes (best-effort)
 				go func() {
 					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 					defer cancel()
 
-					// messages indexes
+					// ----------------------------
+					// MESSAGES Indexes
+					// ----------------------------
+					// Fast paging: bot_id + chat_id + timestamp desc + message_id desc
 					_, _ = chatHistoryCollection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 						{
 							Keys: bson.D{
 								{Key: "bot_id", Value: 1},
 								{Key: "chat_id", Value: 1},
-								{Key: "timestamp", Value: 1},
+								{Key: "timestamp", Value: -1},
+								{Key: "message_id", Value: -1},
 							},
 						},
+						// ✅ unique per bot (so multi-bot collision na ho)
 						{
-							Keys:    bson.D{{Key: "message_id", Value: 1}},
+							Keys:    bson.D{{Key: "bot_id", Value: 1}, {Key: "message_id", Value: 1}},
 							Options: options.Index().SetUnique(true).SetSparse(true),
 						},
 					})
 
-					// media indexes
+					// ----------------------------
+					// MEDIA Indexes
+					// ----------------------------
 					if mediaCollection != nil {
 						_, _ = mediaCollection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 							{
 								Keys: bson.D{
 									{Key: "bot_id", Value: 1},
-									{Key: "chat_id", Value: 1},
-									{Key: "created_at", Value: 1},
+									{Key: "created_at", Value: -1},
 								},
 							},
 							{
-								Keys:    bson.D{{Key: "message_id", Value: 1}},
+								Keys:    bson.D{{Key: "bot_id", Value: 1}, {Key: "message_id", Value: 1}},
 								Options: options.Index().SetUnique(true).SetSparse(true),
 							},
 						})
 					}
 
-					// statuses indexes
+					// ----------------------------
+					// STATUSES Indexes
+					// ----------------------------
 					if statusCollection != nil {
 						_, _ = statusCollection.Indexes().CreateMany(ctx, []mongo.IndexModel{
 							{
 								Keys: bson.D{
 									{Key: "bot_id", Value: 1},
-									{Key: "timestamp", Value: 1},
+									{Key: "timestamp", Value: -1},
 								},
 							},
 							{
 								Keys: bson.D{
+									{Key: "bot_id", Value: 1},
 									{Key: "chat_id", Value: 1},
-									{Key: "timestamp", Value: 1},
+									{Key: "timestamp", Value: -1},
 								},
 							},
 						})
@@ -309,9 +322,8 @@ func main() {
 	http.HandleFunc("/api/media", handleGetMedia)
 	http.HandleFunc("/api/avatar", handleGetAvatar)
 
-	// ✅ Status APIs (route now, handler later)
-	// (یہ اس لیے add کر دیا تاکہ frontend میں tab لگاتے ہی backend route ready ہو)
-	http.HandleFunc("/api/statuses", handleGetStatuses) // اگر ابھی نہیں بنا تو dummy بنا لیں گے
+	// ✅ Status APIs (route now)
+	http.HandleFunc("/api/statuses", handleGetStatuses)
 
 	// ----------------------------------------------------
 	// ✅ Health / Ready
@@ -323,24 +335,22 @@ func main() {
 	})
 
 	http.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		type dep struct {
-			Postgres bool `json:"postgres"`
-			Redis    bool `json:"redis"`
-			Mongo    bool `json:"mongo"`
+		deps := map[string]bool{
+			"postgres": rawDB != nil,
+			"redis":    rdb != nil,
+			"mongo":    mongoClient != nil,
 		}
-		d := dep{
-			Postgres: rawDB != nil,
-			Redis:    rdb != nil,
-			Mongo:    mongoClient != nil,
-		}
+
+		ok := deps["postgres"] && deps["redis"] // mongo optional
 		w.Header().Set("Content-Type", "application/json")
-		if !d.Postgres || !d.Redis {
+
+		if !ok {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "deps": d})
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "deps": deps})
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "deps": d})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "deps": deps})
 	})
 
 	// ----------------------------------------------------
@@ -396,6 +406,97 @@ func main() {
 	fmt.Println("👋 Goodbye!")
 }
 
+func saveMediaForMessage(client *whatsmeow.Client, botID, messageID, kind string, anyMsg interface{}) {
+	if mediaCollection == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var data []byte
+	var err error
+	var mime string
+
+	// Download based on type
+	switch m := anyMsg.(type) {
+	case *waProto.ImageMessage:
+		data, err = client.Download(ctx, m)
+		mime = "image/jpeg"
+	case *waProto.StickerMessage:
+		data, err = client.Download(ctx, m)
+		mime = "image/webp"
+	case *waProto.VideoMessage:
+		data, err = client.Download(ctx, m)
+		mime = "video/mp4"
+	case *waProto.AudioMessage:
+		data, err = client.Download(ctx, m)
+		mime = "audio/ogg"
+	case *waProto.DocumentMessage:
+		data, err = client.Download(ctx, m)
+		mime = m.GetMimetype()
+	default:
+		return
+	}
+
+	if err != nil || len(data) == 0 {
+		return
+	}
+
+	// Strategy:
+	// - small media: store as data-url in mongo
+	// - large: upload to catbox and store url (you already have UploadToCatbox)
+	const maxInline = 2 * 1024 * 1024 // 2MB inline (safe)
+	content := ""
+
+	if len(data) <= maxInline {
+		enc := base64.StdEncoding.EncodeToString(data)
+		if strings.HasPrefix(mime, "image/") {
+			content = "data:" + mime + ";base64," + enc
+		} else if strings.HasPrefix(mime, "audio/") {
+			content = "data:" + mime + ";base64," + enc
+		} else {
+			content = "data:application/octet-stream;base64," + enc
+		}
+	} else {
+		name := "file.bin"
+		if kind == "video" {
+			name = "video.mp4"
+		} else if kind == "audio" {
+			name = "audio.ogg"
+		} else if kind == "image" {
+			name = "image.jpg"
+		} else if kind == "sticker" {
+			name = "sticker.webp"
+		}
+		if url, upErr := UploadToCatbox(data, name); upErr == nil {
+			content = url
+		}
+	}
+
+	if content == "" {
+		return
+	}
+
+	md := MediaDoc{
+		BotID:     botID,
+		MessageID: messageID,
+		Type:      kind,
+		Mime:      mime,
+		Content:   content,
+		Size:      len(data),
+		CreatedAt: time.Now(),
+	}
+
+	// Upsert (overwrite if re-downloaded)
+	_, _ = mediaCollection.UpdateOne(
+		ctx,
+		bson.M{"bot_id": botID, "message_id": messageID},
+		bson.M{"$set": md},
+		options.Update().SetUpsert(true),
+	)
+}
+
 func handleGetStatuses(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`[]`))
@@ -449,32 +550,19 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waP
 		return
 	}
 
-	// ✅ Generate a stable-ish message id (best: pass real Info.ID later)
-	messageID := uuid.NewString()
-
-	var msgType, content, senderName string
-	var quotedMsg, quotedSender string
-	var isSticker bool
-
-	// IMPORTANT: keep timestamp as time.Time (matches your ChatMessage struct + HTML new Date(...))
 	timestamp := time.Unix(int64(ts), 0)
-
 	isGroup := strings.Contains(chatID, "@g.us")
 	isChannel := strings.Contains(chatID, "@newsletter")
-	isStatus := chatID == "status@broadcast" // common WA status chat
 
 	jid, _ := types.ParseJID(chatID)
 
-	// ✅ Name lookup (latest whatsmeow needs context)
+	// -------- Sender Name Lookup --------
+	senderName := ""
 	if isGroup {
 		if info, err := client.GetGroupInfo(context.Background(), jid); err == nil {
-			// group name (not sender name). For group sender name, later use event.Info.Sender.
-			if info.Name != "" {
-				senderName = info.Name
-			}
+			senderName = info.Name
 		}
 	}
-
 	if senderName == "" {
 		if contact, err := client.Store.Contacts.GetContact(context.Background(), jid); err == nil && contact.Found {
 			senderName = contact.FullName
@@ -487,7 +575,8 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waP
 		senderName = strings.Split(chatID, "@")[0]
 	}
 
-	// ✅ Reply handling (safe pointers)
+	// -------- Reply Info --------
+	var quotedMsg, quotedSender string
 	var contextInfo *waProto.ContextInfo
 	if msg.ExtendedTextMessage != nil {
 		contextInfo = msg.ExtendedTextMessage.ContextInfo
@@ -521,182 +610,82 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waP
 		}
 	}
 
-	// ✅ Lightweight message content + Media stored separately
-	// Rule:
-	// - messages collection: content is TEXT or "MEDIA_WAITING"
-	// - media collection: actual base64/url stored by message_id
-	var mediaToSave *MediaItem
+	// -------- Determine message_id (very important) --------
+	// You must pass the same message_id that frontend will use.
+	// If you already have a message ID from event, use it.
+	// If not, use a fallback unique ID (timestamp+rand). (Better: use event's ID)
+	messageID := ""
+	// NOTE: You likely have it in your event handler; pass it in if possible.
+	// As fallback:
+	messageID = fmt.Sprintf("%d-%d", timestamp.Unix(), time.Now().UnixNano())
 
+	// -------- Content logic (messages + media split) --------
+	msgType := ""
+	content := ""
+	isSticker := false
+
+	// Text
 	if txt := getText(msg); txt != "" {
 		msgType = "text"
 		content = txt
 	} else if msg.ImageMessage != nil {
 		msgType = "image"
 		content = "MEDIA_WAITING"
-
-		// download now (simple). Later we can change to on-demand by storing proto.
-		data, err := client.Download(context.Background(), msg.ImageMessage)
-		if err == nil && len(data) > 0 && mediaCollection != nil {
-			encoded := base64.StdEncoding.EncodeToString(data)
-			mediaToSave = &MediaItem{
-				BotID:     botID,
-				ChatID:    chatID,
-				MessageID: messageID,
-				Kind:      "image",
-				Mime:      "image/jpeg",
-				Content:   "data:image/jpeg;base64," + encoded,
-				Size:      len(data),
-				CreatedAt: time.Now(),
-			}
-		}
+		saveMediaForMessage(client, botID, messageID, "image", msg.ImageMessage)
 	} else if msg.StickerMessage != nil {
 		msgType = "image"
 		isSticker = true
 		content = "MEDIA_WAITING"
-
-		data, err := client.Download(context.Background(), msg.StickerMessage)
-		if err == nil && len(data) > 0 && mediaCollection != nil {
-			encoded := base64.StdEncoding.EncodeToString(data)
-			mediaToSave = &MediaItem{
-				BotID:     botID,
-				ChatID:    chatID,
-				MessageID: messageID,
-				Kind:      "sticker",
-				Mime:      "image/webp",
-				Content:   "data:image/webp;base64," + encoded,
-				Size:      len(data),
-				CreatedAt: time.Now(),
-			}
-		}
-	} else if msg.AudioMessage != nil {
-		msgType = "audio"
-		content = "MEDIA_WAITING"
-
-		data, err := client.Download(context.Background(), msg.AudioMessage)
-		if err == nil && len(data) > 0 && mediaCollection != nil {
-			// keep small as base64, large as catbox url
-			if len(data) > 10*1024*1024 {
-				url, err := UploadToCatbox(data, "audio.ogg")
-				if err == nil && url != "" {
-					mediaToSave = &MediaItem{
-						BotID:     botID,
-						ChatID:    chatID,
-						MessageID: messageID,
-						Kind:      "audio",
-						Mime:      "audio/ogg",
-						Content:   url,
-						Size:      len(data),
-						CreatedAt: time.Now(),
-					}
-				}
-			} else {
-				encoded := base64.StdEncoding.EncodeToString(data)
-				mediaToSave = &MediaItem{
-					BotID:     botID,
-					ChatID:    chatID,
-					MessageID: messageID,
-					Kind:      "audio",
-					Mime:      "audio/ogg",
-					Content:   "data:audio/ogg;base64," + encoded,
-					Size:      len(data),
-					CreatedAt: time.Now(),
-				}
-			}
-		}
+		saveMediaForMessage(client, botID, messageID, "sticker", msg.StickerMessage)
 	} else if msg.VideoMessage != nil {
 		msgType = "video"
 		content = "MEDIA_WAITING"
-
-		data, err := client.Download(context.Background(), msg.VideoMessage)
-		if err == nil && len(data) > 0 && mediaCollection != nil {
-			// videos usually large -> url
-			url, err := UploadToCatbox(data, "video.mp4")
-			if err == nil && url != "" {
-				mediaToSave = &MediaItem{
-					BotID:     botID,
-					ChatID:    chatID,
-					MessageID: messageID,
-					Kind:      "video",
-					Mime:      "video/mp4",
-					Content:   url,
-					Size:      len(data),
-					CreatedAt: time.Now(),
-				}
-			}
-		}
+		saveMediaForMessage(client, botID, messageID, "video", msg.VideoMessage)
+	} else if msg.AudioMessage != nil {
+		msgType = "audio"
+		content = "MEDIA_WAITING"
+		saveMediaForMessage(client, botID, messageID, "audio", msg.AudioMessage)
 	} else if msg.DocumentMessage != nil {
 		msgType = "file"
 		content = "MEDIA_WAITING"
-
-		data, err := client.Download(context.Background(), msg.DocumentMessage)
-		if err == nil && len(data) > 0 && mediaCollection != nil {
-			fname := msg.DocumentMessage.GetFileName()
-			if fname == "" {
-				fname = "file.bin"
-			}
-			url, err := UploadToCatbox(data, fname)
-			if err == nil && url != "" {
-				mediaToSave = &MediaItem{
-					BotID:     botID,
-					ChatID:    chatID,
-					MessageID: messageID,
-					Kind:      "file",
-					Mime:      msg.DocumentMessage.GetMimetype(),
-					Content:   url,
-					Size:      len(data),
-					CreatedAt: time.Now(),
-				}
-			}
-		}
+		saveMediaForMessage(client, botID, messageID, "file", msg.DocumentMessage)
 	} else {
 		return
 	}
 
-	// if media download failed but it is a media message -> keep message saved as waiting (UI shows download icon later)
-	if content == "" {
-		return
-	}
-
-	// ✅ Save ChatMessage (lightweight)
 	doc := ChatMessage{
 		BotID:        botID,
 		ChatID:       chatID,
-		Sender:       chatID,        // later: real sender from event.Info.Sender
-		SenderName:   senderName,    // ok for now
+		Sender:       chatID,
+		SenderName:   senderName,
 		MessageID:    messageID,
 		Timestamp:    timestamp,
 		Type:         msgType,
-		Content:      content,       // TEXT or MEDIA_WAITING
+		Content:      content, // text or MEDIA_WAITING
 		IsFromMe:     isFromMe,
 		IsGroup:      isGroup,
 		IsChannel:    isChannel,
+		IsSticker:    isSticker,
 		QuotedMsg:    quotedMsg,
 		QuotedSender: quotedSender,
-		IsSticker:    isSticker,
 	}
 
-	_, err := chatHistoryCollection.InsertOne(context.Background(), doc)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := chatHistoryCollection.InsertOne(ctx, doc)
 	if err != nil {
 		fmt.Printf("❌ Mongo Save Error: %v\n", err)
 		return
 	}
 
-	// ✅ Save Media separately (if present)
-	if mediaToSave != nil && mediaCollection != nil {
-		_, mErr := mediaCollection.InsertOne(context.Background(), mediaToSave)
-		if mErr != nil {
-			fmt.Printf("❌ Mongo Media Save Error: %v\n", mErr)
-		}
-	}
-
-	// ✅ Optional: Save Status separately (so HTML can show statuses later)
-	if isStatus && statusCollection != nil {
-		// Reuse ChatMessage schema in statuses too (simple)
-		_, sErr := statusCollection.InsertOne(context.Background(), doc)
-		if sErr != nil {
-			fmt.Printf("❌ Mongo Status Save Error: %v\n", sErr)
-		}
-	}
+	// 🔥 realtime update to UI (if you want)
+	broadcastWS(map[string]any{
+		"type":    "new_message",
+		"bot_id":  botID,
+		"chat_id": chatID,
+		"msg":     doc,
+	})
 }
 
 // ⚡ SetGlobalClient
@@ -1143,98 +1132,144 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(sessions)
 }
 
+type ChatItemV2 struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Type        string    `json:"type"` // user/group/channel
+	LastType    string    `json:"last_type,omitempty"`
+	LastPreview string    `json:"last_preview,omitempty"`
+	LastTime    time.Time `json:"last_time,omitempty"`
+}
+
 func handleGetChats(w http.ResponseWriter, r *http.Request) {
 	if chatHistoryCollection == nil {
 		http.Error(w, "MongoDB not connected", 500)
 		return
 	}
+
 	botID := r.URL.Query().Get("bot_id")
 	if botID == "" {
 		http.Error(w, "Bot ID required", 400)
 		return
 	}
 
-	filter := bson.M{"bot_id": botID}
-	rawChats, err := chatHistoryCollection.Distinct(context.Background(), "chat_id", filter)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// pipeline: match -> sort desc -> group by chat_id taking first (latest) -> sort by last timestamp
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"bot_id": botID}}},
+		{{Key: "$sort", Value: bson.D{{Key: "timestamp", Value: -1}, {Key: "message_id", Value: -1}}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":         "$chat_id",
+			"last_type":   bson.M{"$first": "$type"},
+			"last_content": bson.M{"$first": "$content"},
+			"last_time":   bson.M{"$first": "$timestamp"},
+			"sender_name": bson.M{"$first": "$sender_name"},
+		}}},
+		{{Key: "$sort", Value: bson.D{{Key: "last_time", Value: -1}}}},
+		{{Key: "$limit", Value: 500}},
+	}
+
+	cur, err := chatHistoryCollection.Aggregate(ctx, pipeline)
 	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	defer cur.Close(ctx)
+
+	type row struct {
+		ChatID      string    `bson:"_id"`
+		LastType    string    `bson:"last_type"`
+		LastContent string    `bson:"last_content"`
+		LastTime    time.Time `bson:"last_time"`
+		SenderName  string    `bson:"sender_name"`
+	}
+
+	var rows []row
+	if err := cur.All(ctx, &rows); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 
 	clientsMutex.RLock()
-	client, isConnected := activeClients[botID]
+	botClient, isConnected := activeClients[botID]
 	clientsMutex.RUnlock()
 
-	var chatList []ChatItem
+	out := make([]ChatItemV2, 0, len(rows))
 
-	for _, raw := range rawChats {
-		chatID := raw.(string)
-		cleanName := ""
+	for _, it := range rows {
+		chatID := it.ChatID
 		chatType := "user"
-
 		if strings.Contains(chatID, "@g.us") {
 			chatType = "group"
-		}
-		if strings.Contains(chatID, "@newsletter") {
+		} else if strings.Contains(chatID, "@newsletter") {
 			chatType = "channel"
 		}
 
-		if isConnected && client != nil {
+		// Preview (don't send full base64)
+		preview := it.LastContent
+		if preview == "MEDIA_WAITING" || it.LastType != "text" {
+			switch it.LastType {
+			case "image":
+				preview = "📷 Photo"
+			case "video":
+				preview = "🎥 Video"
+			case "audio":
+				preview = "🎤 Voice"
+			case "file":
+				preview = "📄 File"
+			default:
+				preview = "📎 Media"
+			}
+		} else if len(preview) > 60 {
+			preview = preview[:60] + "…"
+		}
+
+		name := ""
+		if isConnected && botClient != nil {
 			jid, _ := types.ParseJID(chatID)
 
 			if chatType == "group" {
-				// ✅ SAFE GROUP NAME LOOKUP
-				if grp, err := client.GetGroupInfo(context.Background(), jid); err == nil {
-					cleanName = grp.Name
+				if grp, err := botClient.GetGroupInfo(context.Background(), jid); err == nil {
+					name = grp.Name
 				}
-			} else if chatType == "user" {
-				// ✅ SAFE CONTACT LOOKUP
-				if contact, err := client.Store.Contacts.GetContact(context.Background(), jid); err == nil && contact.Found {
-					cleanName = contact.FullName
-					if cleanName == "" {
-						cleanName = contact.PushName
+			} else {
+				if contact, err := botClient.Store.Contacts.GetContact(context.Background(), jid); err == nil && contact.Found {
+					name = contact.FullName
+					if name == "" {
+						name = contact.PushName
 					}
 				}
-			} else if chatType == "channel" {
-				// ✅ Try Contact Store for Channels (Avoids breaking on struct mismatch)
-				if contact, err := client.Store.Contacts.GetContact(context.Background(), jid); err == nil && contact.Found {
-					cleanName = contact.FullName
-				}
 			}
 		}
-
-		// Fallback: Check MongoDB History
-		if cleanName == "" {
-			var lastMsg ChatMessage
-			err := chatHistoryCollection.FindOne(context.Background(),
-				bson.M{"bot_id": botID, "chat_id": chatID, "sender_name": bson.M{"$ne": ""}},
-				options.FindOne().SetSort(bson.D{{Key: "timestamp", Value: -1}})).Decode(&lastMsg)
-
-			if err == nil && lastMsg.SenderName != "" && lastMsg.SenderName != chatID {
-				cleanName = lastMsg.SenderName
+		if name == "" {
+			if it.SenderName != "" {
+				name = it.SenderName
 			}
 		}
-
-		// Final Fallback
-		if cleanName == "" {
+		if name == "" {
 			if chatType == "group" {
-				cleanName = "Unknown Group"
+				name = "Unknown Group"
 			} else if chatType == "channel" {
-				cleanName = "Unknown Channel"
+				name = "Unknown Channel"
 			} else {
-				cleanName = "+" + strings.Split(chatID, "@")[0]
+				name = "+" + strings.Split(chatID, "@")[0]
 			}
 		}
 
-		chatList = append(chatList, ChatItem{
-			ID:   chatID,
-			Name: cleanName,
-			Type: chatType,
+		out = append(out, ChatItemV2{
+			ID:          chatID,
+			Name:        name,
+			Type:        chatType,
+			LastType:    it.LastType,
+			LastPreview: preview,
+			LastTime:    it.LastTime,
 		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(chatList)
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 // 4. Get Messages (FULL DATA LOAD - NO WAITING)
@@ -1247,84 +1282,55 @@ func handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	botID := r.URL.Query().Get("bot_id")
 	chatID := r.URL.Query().Get("chat_id")
 	if botID == "" || chatID == "" {
-		http.Error(w, "bot_id and chat_id are required", 400)
+		http.Error(w, "bot_id and chat_id required", 400)
 		return
 	}
 
-	// ----------------------------
-	// Query params
-	// ----------------------------
-	// limit=80 (default)
-	limit := int64(80)
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if parsed, err := strconv.ParseInt(l, 10, 64); err == nil {
-			if parsed < 1 {
-				parsed = 1
+	limit := 100
+	if s := r.URL.Query().Get("limit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			if n < 1 {
+				n = 1
 			}
-			if parsed > 300 {
-				parsed = 300 // hard cap to protect DB
+			if n > 200 {
+				n = 200
 			}
-			limit = parsed
+			limit = n
 		}
 	}
 
-	// before=<unix_ms>  -> get older messages (DESC limit) then reverse to ASC
-	beforeStr := r.URL.Query().Get("before")
+	// Cursor: before="<unix>|<message_id>"
+	before := r.URL.Query().Get("before")
 
-	// after_ts=<unix_ms> -> get only newer messages for polling
-	afterStr := r.URL.Query().Get("after_ts")
-
-	// ----------------------------
-	// Build filter
-	// ----------------------------
 	filter := bson.M{
 		"bot_id":  botID,
 		"chat_id": chatID,
 	}
 
-	// NOTE:
-	// We assume `timestamp` in Mongo is numeric unix ms (int64) OR BSON Date.
-	// If it's BSON Date, pass Date in query from frontend OR convert here.
-	// For now, we'll treat it as int64 unix ms. (works if stored as int64)
-	if afterStr != "" {
-		if afterTS, err := strconv.ParseInt(afterStr, 10, 64); err == nil {
-			filter["timestamp"] = bson.M{"$gt": afterTS}
-		}
-	}
+	if before != "" {
+		parts := strings.SplitN(before, "|", 2)
+		if len(parts) == 2 {
+			beforeTsUnix, err := strconv.ParseInt(parts[0], 10, 64)
+			if err == nil {
+				beforeID := parts[1]
+				beforeTime := time.Unix(beforeTsUnix, 0)
 
-	// If before is provided, it is used for pagination to fetch older messages.
-	// It should NOT be combined with after_ts in normal usage.
-	descMode := false
-	if beforeStr != "" {
-		if beforeTS, err := strconv.ParseInt(beforeStr, 10, 64); err == nil {
-			// older than beforeTS
-			// if after_ts already applied, keep it; else overwrite timestamp filter
-			if existing, ok := filter["timestamp"].(bson.M); ok {
-				existing["$lt"] = beforeTS
-				filter["timestamp"] = existing
-			} else {
-				filter["timestamp"] = bson.M{"$lt": beforeTS}
+				filter["$or"] = []bson.M{
+					{"timestamp": bson.M{"$lt": beforeTime}},
+					{"timestamp": beforeTime, "message_id": bson.M{"$lt": beforeID}},
+				}
 			}
-			// For "before", we fetch DESC to get newest of the older chunk, then reverse.
-			descMode = true
 		}
 	}
 
-	// ----------------------------
-	// Find options
-	// ----------------------------
-	opts := options.Find().SetLimit(limit)
+	opts := options.Find().
+		SetSort(bson.D{
+			{Key: "timestamp", Value: -1},
+			{Key: "message_id", Value: -1},
+		}).
+		SetLimit(int64(limit))
 
-	if descMode {
-		opts.SetSort(bson.D{{Key: "timestamp", Value: -1}})
-	} else {
-		opts.SetSort(bson.D{{Key: "timestamp", Value: 1}})
-	}
-
-	// ----------------------------
-	// Query DB
-	// ----------------------------
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	cursor, err := chatHistoryCollection.Find(ctx, filter, opts)
@@ -1334,48 +1340,69 @@ func handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cursor.Close(ctx)
 
-	var messages []ChatMessage
-	if err = cursor.All(ctx, &messages); err != nil {
+	var items []ChatMessage
+	if err := cursor.All(ctx, &items); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
 
-	// If fetched DESC (for before pagination), reverse to ASC for UI consistency
-	if descMode && len(messages) > 1 {
-		for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-			messages[i], messages[j] = messages[j], messages[i]
-		}
+	// reverse so frontend can render in natural order
+	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+		items[i], items[j] = items[j], items[i]
 	}
 
-	// ----------------------------
-	// Pagination cursor hint
-	// ----------------------------
-	var nextBeforeTS *int64
-	if len(messages) > 0 {
-		// earliest msg timestamp for next "before" call
-		// (frontend can call before=<this> to load older)
-		earliest := extractTimestamp(messages[0])
-		nextBeforeTS = &earliest
+	nextBefore := ""
+	if len(items) > 0 {
+		oldest := items[0]
+		nextBefore = fmt.Sprintf("%d|%s", oldest.Timestamp.Unix(), oldest.MessageID)
 	}
 
-	// ----------------------------
-	// Response
-	// ----------------------------
 	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":      "ok",
+		"count":       len(items),
+		"next_before": nextBefore,
+		"messages":    items,
+	})
+}
 
-	// Backward compatible:
-	// - If you want old frontend to still work (expects array), return array directly when no cursor requested.
-	// Better for your new UI:
-	// - return object with data + cursor
-	// We'll return object ALWAYS (more future-proof).
-	resp := map[string]any{
-		"messages":        messages,
-		"next_before_ts":  nextBeforeTS,
-		"count":           len(messages),
-		"bot_id":          botID,
-		"chat_id":         chatID,
+func ensureMongoIndexes(db *mongo.Database) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// messages: bot_id + chat_id + timestamp + message_id (paging fast)
+	_, err := db.Collection("messages").Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "bot_id", Value: 1},
+			{Key: "chat_id", Value: 1},
+			{Key: "timestamp", Value: -1},
+			{Key: "message_id", Value: -1},
+		},
+	})
+	if err != nil {
+		fmt.Println("⚠️ index messages failed:", err)
 	}
-	_ = json.NewEncoder(w).Encode(resp)
+
+	// media: bot_id + message_id (fast download)
+	_, err = db.Collection("media").Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "bot_id", Value: 1},
+			{Key: "message_id", Value: 1},
+		},
+	})
+	if err != nil {
+		fmt.Println("⚠️ index media failed:", err)
+	}
+
+	// statuses optional
+	_, _ = db.Collection("statuses").Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys: bson.D{
+			{Key: "bot_id", Value: 1},
+			{Key: "timestamp", Value: -1},
+		},
+	})
+
+	return nil
 }
 
 // helper: extract timestamp as int64
@@ -1403,31 +1430,46 @@ func extractTimestamp(m ChatMessage) int64 {
 	}
 }
 
+type MediaDoc struct {
+	BotID     string    `bson:"bot_id" json:"bot_id"`
+	MessageID string    `bson:"message_id" json:"message_id"`
+	Type      string    `bson:"type" json:"type"`     // image/audio/video/file/sticker
+	Mime      string    `bson:"mime" json:"mime"`     // image/jpeg, audio/ogg etc
+	Content   string    `bson:"content" json:"content"` // base64 data-url OR remote url
+	Size      int       `bson:"size" json:"size"`
+	CreatedAt time.Time `bson:"created_at" json:"created_at"`
+}
+
 func handleGetMedia(w http.ResponseWriter, r *http.Request) {
-	if chatHistoryCollection == nil {
-		http.Error(w, "MongoDB not connected", 500)
+	if mediaCollection == nil {
+		http.Error(w, "MongoDB media collection not connected", 500)
 		return
 	}
 
+	botID := r.URL.Query().Get("bot_id")
 	msgID := r.URL.Query().Get("msg_id")
-	if msgID == "" {
-		http.Error(w, "Message ID required", 400)
+	if botID == "" || msgID == "" {
+		http.Error(w, "bot_id and msg_id required", 400)
 		return
 	}
 
-	filter := bson.M{"message_id": msgID}
-	var msg ChatMessage
-	err := chatHistoryCollection.FindOne(context.Background(), filter).Decode(&msg)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var media MediaDoc
+	err := mediaCollection.FindOne(ctx, bson.M{"bot_id": botID, "message_id": msgID}).Decode(&media)
 	if err != nil {
 		http.Error(w, "Media not found", 404)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":  "ok",
-		"content": msg.Content,
-		"type":    msg.Type,
+		"type":    media.Type,
+		"mime":    media.Mime,
+		"content": media.Content,
+		"size":    media.Size,
 	})
 }
 
