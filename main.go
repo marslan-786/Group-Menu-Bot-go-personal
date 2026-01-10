@@ -41,6 +41,8 @@ type ChatMessage struct {
 	Type       string    `bson:"type" json:"type"` // text, image, video, audio
 	Content    string    `bson:"content" json:"content"` // Text or URL
 	IsFromMe   bool      `bson:"is_from_me" json:"is_from_me"`
+	IsGroup    bool      `bson:"is_group" json:"is_group"`
+	IsChannel  bool      `bson:"is_channel" json:"is_channel"`
 }
 
 var (
@@ -869,69 +871,94 @@ func UploadToCatbox(data []byte, filename string) (string, error) {
 }
 
 // 🔥 HELPER: Save Message to Mongo (Fixed Download & Variable)
+// 📦 STRUCT UPDATE (اسے main.go یا commands.go میں جہاں struct ہے وہاں replace کریں)
+
+// 🔥 HELPER: Save Message to Mongo (Updated with 10MB Logic & Tabs)
 func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waProto.Message, isFromMe bool, ts uint64) {
-	// ✅ FIX: Using chatHistoryCollection
-	if chatHistoryCollection == nil {
-		return
-	}
+	if chatHistoryCollection == nil { return }
 
-	var msgType, content string
+	var msgType, content, senderName string
 	timestamp := time.Unix(int64(ts), 0)
+	
+	// 🏷️ Identify Chat Type (Group/Channel/Private)
+	isGroup := strings.Contains(chatID, "@g.us")
+	isChannel := strings.Contains(chatID, "@newsletter")
 
-	// 1. TEXT HANDLING
+	// 🕵️ NAME LOOKUP
+	jid, _ := types.ParseJID(chatID)
+	if contact, err := client.Store.Contacts.GetContact(jid); err == nil && contact.Found {
+		senderName = contact.FullName
+		if senderName == "" { senderName = contact.PushName }
+	} else if contact, err := client.Store.Contacts.GetContact(jid); err == nil {
+		senderName = contact.PushName
+	}
+	if senderName == "" { senderName = strings.Split(chatID, "@")[0] }
+
+	// 📂 MEDIA HANDLING
 	if txt := getText(msg); txt != "" {
 		msgType = "text"
 		content = txt
 	} else if msg.ImageMessage != nil {
+		// --- IMAGE (Always Mongo Base64 as per request) ---
 		msgType = "image"
-		content = "[Image] " + msg.ImageMessage.GetCaption()
+		data, err := client.Download(context.Background(), msg.ImageMessage)
+		if err == nil {
+			encoded := base64.StdEncoding.EncodeToString(data)
+			content = "data:image/jpeg;base64," + encoded
+		}
 	} else if msg.VideoMessage != nil {
-		// 3. VIDEO Handling
+		// --- VIDEO (Always Catbox as per request) ---
 		msgType = "video"
-		// ✅ FIX: Added context.Background() to Download
 		data, err := client.Download(context.Background(), msg.VideoMessage)
 		if err == nil {
 			url, err := UploadToCatbox(data, "video.mp4")
-			if err == nil {
-				content = url
+			if err == nil { content = url }
+		}
+	} else if msg.AudioMessage != nil {
+		// --- AUDIO (Logic: <10MB Mongo, >10MB Catbox) ---
+		msgType = "audio"
+		data, err := client.Download(context.Background(), msg.AudioMessage)
+		if err == nil {
+			// ⚡ Check Size: 10MB = 10 * 1024 * 1024 bytes
+			if len(data) > 10*1024*1024 {
+				// Too big -> Upload to Catbox
+				url, err := UploadToCatbox(data, "audio.ogg")
+				if err == nil { content = url }
 			} else {
-				content = "Error uploading video"
+				// Small enough -> Save in Mongo (Base64)
+				encoded := base64.StdEncoding.EncodeToString(data)
+				// MIME type audio/ogg or audio/mpeg
+				content = "data:audio/ogg;base64," + encoded
 			}
 		}
 	} else if msg.DocumentMessage != nil {
-		// 4. DOCUMENT Handling
 		msgType = "file"
-		// ✅ FIX: Added context.Background() to Download
 		data, err := client.Download(context.Background(), msg.DocumentMessage)
 		if err == nil {
 			fname := msg.DocumentMessage.GetFileName()
-			if fname == "" {
-				fname = "file.bin"
-			}
+			if fname == "" { fname = "file.bin" }
 			url, err := UploadToCatbox(data, fname)
-			if err == nil {
-				content = url
-			}
+			if err == nil { content = url }
 		}
 	} else {
-		return // Unknown type
+		return 
 	}
 
-	if content == "" {
-		return
-	}
+	if content == "" { return }
 
 	doc := ChatMessage{
-		BotID:     botID,
-		ChatID:    chatID,
-		Sender:    chatID,
-		Type:      msgType,
-		Content:   content,
-		IsFromMe:  isFromMe,
-		Timestamp: timestamp,
+		BotID:      botID,
+		ChatID:     chatID,
+		Sender:     chatID,
+		SenderName: senderName,
+		Type:       msgType,
+		Content:    content,
+		IsFromMe:   isFromMe,
+		Timestamp:  timestamp,
+		IsGroup:    isGroup,    // ✅ Saved
+		IsChannel:  isChannel,  // ✅ Saved
 	}
 
-	// ✅ FIX: Using chatHistoryCollection
 	_, err := chatHistoryCollection.InsertOne(context.Background(), doc)
 	if err != nil {
 		fmt.Printf("❌ Mongo Save Error: %v\n", err)
