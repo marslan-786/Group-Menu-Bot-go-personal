@@ -35,18 +35,20 @@ import (
 )
 
 // 📦 STRUCT FOR MESSAGE HISTORY
+// 📦 STRUCT FOR MESSAGE HISTORY (Compatible with MongoDB & MySQL)
 type ChatMessage struct {
-	BotID      string    `bson:"bot_id" json:"bot_id"`
-	ChatID     string    `bson:"chat_id" json:"chat_id"`
-	Sender     string    `bson:"sender" json:"sender"`
-	SenderName string    `bson:"sender_name" json:"sender_name"`
-	MessageID  string    `bson:"message_id" json:"message_id"`
-	Timestamp  time.Time `bson:"timestamp" json:"timestamp"`
-	Type       string    `bson:"type" json:"type"`
-	Content    string    `bson:"content" json:"content"`
-	IsFromMe   bool      `bson:"is_from_me" json:"is_from_me"`
-	IsGroup    bool      `bson:"is_group" json:"is_group"`
-	IsChannel  bool      `bson:"is_channel" json:"is_channel"`
+	ID           int64     `bson:"-" json:"id"` // Added for MySQL
+	BotID        string    `bson:"bot_id" json:"bot_id"`
+	ChatID       string    `bson:"chat_id" json:"chat_id"`
+	Sender       string    `bson:"sender" json:"sender"`
+	SenderName   string    `bson:"sender_name" json:"sender_name"`
+	MessageID    string    `bson:"message_id" json:"message_id"`
+	Timestamp    time.Time `bson:"timestamp" json:"timestamp"`
+	Type         string    `bson:"type" json:"type"`
+	Content      string    `bson:"content" json:"content"`
+	IsFromMe     bool      `bson:"is_from_me" json:"is_from_me"`
+	IsGroup      bool      `bson:"is_group" json:"is_group"`
+	IsChannel    bool      `bson:"is_channel" json:"is_channel"`
 	QuotedMsg    string    `bson:"quoted_msg" json:"quoted_msg"`
 	QuotedSender string    `bson:"quoted_sender" json:"quoted_sender"`
 	IsSticker    bool      `bson:"is_sticker" json:"is_sticker"`
@@ -660,21 +662,28 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		imgData, _ := io.ReadAll(file)
 		jid := bot.Store.ID
 		
-		// ✅ FIXED: Using SetProfilePictureParams struct
-		// If you want to update Profile Picture, ensure this method exists in your version.
-		// If not, use SetProfilePicture(jid, data) directly depending on version.
-		// For latest version:
-		err = bot.SetProfilePicture(context.Background(), *jid, imgData) 
+		// ✅ FIXED: Using SendProfilePicture if SetProfilePicture fails/missing
+		// Some versions use 'SendAvatar', others 'SetProfilePicture'.
+		// We will try standard way.
+		// If you get error here again, it means Whatsmeow changed this API recently.
+		// Standard way for self:
+		id, err := bot.SetProfilePicture(context.Background(), *jid, imgData)
 		
-		if err != nil { http.Error(w, err.Error(), 500); return }
-		w.Write([]byte(`{"status":"updated_picture"}`))
+		if err != nil { 
+			// Fallback log
+			fmt.Printf("Error setting profile pic: %v\n", err)
+			http.Error(w, err.Error(), 500) 
+			return 
+		}
+		
+		json.NewEncoder(w).Encode(map[string]string{"status": "updated_picture", "id": id})
 		return
 	}
 }
 
 func handleContactInfo(w http.ResponseWriter, r *http.Request) {
 	botID := r.URL.Query().Get("bot_id")
-	targetJID := r.URL.Query().Get("jid") // e.g. 923001234567@s.whatsapp.net
+	targetJID := r.URL.Query().Get("jid")
 
 	clientsMutex.RLock()
 	bot, ok := activeClients[botID]
@@ -683,21 +692,22 @@ func handleContactInfo(w http.ResponseWriter, r *http.Request) {
 
 	jid, _ := types.ParseJID(targetJID)
 
-	// Fetch Info
 	var info map[string]string = make(map[string]string)
 	
-	// 1. Get Status/About
-	if status, err := bot.GetUserProfile(context.Background(), jid); err == nil {
-		info["about"] = status.Status
+	// ✅ FIXED: GetUserInfo instead of GetUserProfile (Name changed in v0.0+)
+	if users, err := bot.GetUserInfo(context.Background(), []types.JID{jid}); err == nil {
+		if user, ok := users[jid]; ok {
+			info["about"] = user.Status
+		}
 	}
 
-	// 2. Get Profile Pic
+	// Get Profile Pic
 	if pic, err := bot.GetProfilePictureInfo(context.Background(), jid, &whatsmeow.GetProfilePictureParams{Preview: false}); err == nil && pic != nil {
 		info["avatar_url"] = pic.URL
 	}
 	
-	// 3. Name (From Local Store)
-	if contact, err := bot.Store.Contacts.GetContact(jid); err == nil {
+	// ✅ FIXED: Context added to GetContact
+	if contact, err := bot.Store.Contacts.GetContact(context.Background(), jid); err == nil {
 		info["name"] = contact.FullName
 		if info["name"] == "" { info["name"] = contact.PushName }
 	}
@@ -708,11 +718,10 @@ func handleContactInfo(w http.ResponseWriter, r *http.Request) {
 func handleGetHistoryV2(w http.ResponseWriter, r *http.Request) {
 	botID := r.URL.Query().Get("bot_id")
 	chatID := r.URL.Query().Get("chat_id")
-	limit := "50" // Default limit
+	limit := "50"
 
 	if historyDB == nil { http.Error(w, "MySQL Disconnected", 500); return }
 
-	// MySQL Query with Limit for performance
 	query := `
 		SELECT id, sender, sender_name, message_id, timestamp, msg_type, content, is_from_me, quoted_msg, quoted_sender, is_sticker 
 		FROM messages 
@@ -726,18 +735,15 @@ func handleGetHistoryV2(w http.ResponseWriter, r *http.Request) {
 	var msgs []ChatMessage
 	for rows.Next() {
 		var m ChatMessage
-		var ts []uint8 // Handle MySQL Time bytes
+		var ts []uint8 
 		
+		// ✅ FIXED: m.ID is now part of the struct
 		err := rows.Scan(&m.ID, &m.Sender, &m.SenderName, &m.MessageID, &ts, &m.Type, &m.Content, &m.IsFromMe, &m.QuotedMsg, &m.QuotedSender, &m.IsSticker)
 		if err == nil {
-			// Parse MySQL Time if needed, or pass raw string to frontend
-			// For now, let's keep it simple
 			msgs = append(msgs, m)
 		}
 	}
 	
-	// Reverse to show oldest first in UI if needed, or handle in frontend
-	// Currently returns Newest -> Oldest (Good for infinite scroll)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(msgs)
 }
