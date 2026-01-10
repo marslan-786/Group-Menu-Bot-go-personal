@@ -41,7 +41,7 @@ type ChatMessage struct {
 	SenderName string    `bson:"sender_name" json:"sender_name"`
 	MessageID  string    `bson:"message_id" json:"message_id"`
 	Timestamp  time.Time `bson:"timestamp" json:"timestamp"`
-	Type       string    `bson:"type" json:"type"`
+	Type       string    `bson:"type" json:"type"` 
 	Content    string    `bson:"content" json:"content"`
 	IsFromMe   bool      `bson:"is_from_me" json:"is_from_me"`
 	IsGroup    bool      `bson:"is_group" json:"is_group"`
@@ -52,7 +52,7 @@ type ChatMessage struct {
 type ChatItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	Type string `json:"type"`
+	Type string `json:"type"` 
 }
 
 var (
@@ -462,7 +462,7 @@ func updatePrefixDB(botID string, newPrefix string) {
 }
 
 func serveHTML(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "web/index.html")
+	http.ServeFile(w, r, "web/lists.html")
 }
 
 func servePicture(w http.ResponseWriter, r *http.Request) {
@@ -497,7 +497,6 @@ func broadcastWS(data interface{}) {
 	}
 }
 
-// ✅ handleDeleteSession (Fixed & Included)
 func handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	if client != nil && client.IsConnected() {
 		client.Disconnect()
@@ -810,10 +809,9 @@ func monitorNewSessions(container *sqlstore.Container) {
 	}
 }
 
-// ✅ serveListsHTML (Fixed & Included)
-func serveListsHTML(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "web/lists.html")
-}
+// -----------------------------------------------------
+// 🔥 WEB API HANDLERS (UPDATED NAMES & SCROLL LOGIC)
+// -----------------------------------------------------
 
 func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 	clientsMutex.RLock()
@@ -827,13 +825,22 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGetChats(w http.ResponseWriter, r *http.Request) {
-	if chatHistoryCollection == nil { http.Error(w, "MongoDB not connected", 500); return }
+	if chatHistoryCollection == nil {
+		http.Error(w, "MongoDB not connected", 500)
+		return
+	}
 	botID := r.URL.Query().Get("bot_id")
-	if botID == "" { http.Error(w, "Bot ID required", 400); return }
+	if botID == "" {
+		http.Error(w, "Bot ID required", 400)
+		return
+	}
 
 	filter := bson.M{"bot_id": botID}
 	rawChats, err := chatHistoryCollection.Distinct(context.Background(), "chat_id", filter)
-	if err != nil { http.Error(w, err.Error(), 500); return }
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
 
 	clientsMutex.RLock()
 	client, isConnected := activeClients[botID]
@@ -890,7 +897,9 @@ func handleGetChats(w http.ResponseWriter, r *http.Request) {
 			if isConnected && client != nil {
 				if contact, err := client.Store.Contacts.GetContact(context.Background(), jid); err == nil && contact.Found {
 					cleanName = contact.FullName
-					if cleanName == "" { cleanName = contact.PushName }
+					if cleanName == "" {
+						cleanName = contact.PushName
+					}
 				}
 			}
 		}
@@ -898,8 +907,8 @@ func handleGetChats(w http.ResponseWriter, r *http.Request) {
 		// Fallback: Check MongoDB History if name is still empty
 		if cleanName == "" {
 			var lastMsg ChatMessage
-			err := chatHistoryCollection.FindOne(context.Background(), 
-				bson.M{"bot_id": botID, "chat_id": chatID, "sender_name": bson.M{"$ne": ""}}, 
+			err := chatHistoryCollection.FindOne(context.Background(),
+				bson.M{"bot_id": botID, "chat_id": chatID, "sender_name": bson.M{"$ne": ""}},
 				options.FindOne().SetSort(bson.D{{Key: "timestamp", Value: -1}})).Decode(&lastMsg)
 			if err == nil && lastMsg.SenderName != "" && lastMsg.SenderName != chatID {
 				cleanName = lastMsg.SenderName
@@ -917,13 +926,15 @@ func handleGetChats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Use fetched Avatar if available, else send ID for frontend to fetch later
-		// (We send ID in Name field purely for identification if needed, but structure is cleaner now)
+		// Send fetched name
 		chatList = append(chatList, ChatItem{
 			ID:   chatID,
 			Name: cleanName,
 			Type: chatType,
 		})
+		
+		// Note: avatarURL logic is inside fetchAvatar call in frontend to keep list loading fast
+		_ = avatarURL 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -953,6 +964,7 @@ func handleGetMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 🚀 OPTIMIZATION: Strip Base64 Data
 	for i := range messages {
 		if len(messages[i].Content) > 500 && strings.HasPrefix(messages[i].Content, "data:") {
 			messages[i].Content = "MEDIA_WAITING"
@@ -963,25 +975,32 @@ func handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(messages)
 }
 
-// 5. Get Media (FIXED: Ensure Content Delivery)
 func handleGetMedia(w http.ResponseWriter, r *http.Request) {
-	if chatHistoryCollection == nil { http.Error(w, "DB Error", 500); return }
-	msgID := r.URL.Query().Get("msg_id")
+	if chatHistoryCollection == nil {
+		http.Error(w, "MongoDB not connected", 500)
+		return
+	}
 
+	msgID := r.URL.Query().Get("msg_id")
+	if msgID == "" {
+		http.Error(w, "Message ID required", 400)
+		return
+	}
+
+	filter := bson.M{"message_id": msgID}
 	var msg ChatMessage
-	err := chatHistoryCollection.FindOne(context.Background(), bson.M{"message_id": msgID}).Decode(&msg)
-	
+	err := chatHistoryCollection.FindOne(context.Background(), filter).Decode(&msg)
 	if err != nil {
-		http.Error(w, "Not Found", 404)
+		http.Error(w, "Media not found", 404)
 		return
 	}
 
 	// ⚡ Send data directly
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "ok",
+		"status":  "ok",
 		"content": msg.Content,
-		"type": msg.Type,
+		"type":    msg.Type,
 	})
 }
 
@@ -999,8 +1018,20 @@ func handleGetAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jid, _ := types.ParseJID(chatID)
+	
+	// Check if Channel (Newsletter)
+	if strings.Contains(chatID, "@newsletter") {
+		// Channels use GetNewsletterInfo
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if metadata, err := client.GetNewsletterInfo(ctx, jid); err == nil && metadata.Picture != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"url": metadata.Picture.URL})
+			return
+		}
+	}
 
-	// ✅ FIX: Added context.Background()
+	// Default (User/Group)
 	pic, err := client.GetProfilePictureInfo(context.Background(), jid, &whatsmeow.GetProfilePictureParams{
 		Preview: true,
 	})
