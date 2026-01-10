@@ -29,7 +29,6 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
-	"github.com/google/uuid"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -1405,29 +1404,13 @@ func ensureMongoIndexes(db *mongo.Database) error {
 	return nil
 }
 
-// helper: extract timestamp as int64
-// If your ChatMessage has Timestamp field as int64 already, use that.
-// If it is time.Time, convert to UnixMilli.
-// If it is string, you should fix schema or parse.
 func extractTimestamp(m ChatMessage) int64 {
-	// ✅ adjust according to your struct
-	// common patterns:
-	// - m.Timestamp int64
-	// - m.Timestamp time.Time
-	// - m.Timestamp string (NOT recommended)
-	switch any(m.Timestamp).(type) {
-	case int64:
-		return m.Timestamp
-	case int:
-		return int64(m.Timestamp)
-	default:
-		// if Timestamp is time.Time
-		if t, ok := any(m.Timestamp).(time.Time); ok {
-			return t.UnixMilli()
-		}
-		// fallback: now
-		return time.Now().UnixMilli()
+	// Timestamp is time.Time in your struct
+	if m.Timestamp.IsZero() {
+		return 0
 	}
+	// JS کے لیے best: milliseconds
+	return m.Timestamp.UnixMilli()
 }
 
 type MediaDoc struct {
