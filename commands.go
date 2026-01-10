@@ -40,7 +40,12 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 	// 🛡️ سیف گارڈ: کریش روکنے کے لیے
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("⚠️ [CRASH PREVENTED] Bot %s error: %v\n", botClient.Store.ID.User, r)
+			// botClient nil ہو تو panic نہ ہو
+			bot := "unknown"
+			if botClient != nil && botClient.Store != nil && botClient.Store.ID != nil {
+				bot = botClient.Store.ID.User
+			}
+			fmt.Printf("⚠️ [CRASH PREVENTED] Bot %s error: %v\n", bot, r)
 		}
 	}()
 
@@ -57,22 +62,30 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 		// Filter old messages for COMMANDS only (keep history saving for all)
 		isRecent := time.Since(v.Info.Timestamp) < 1*time.Minute
 
+		// ✅ bot id once
+		botID := "unknown"
+		if botClient.Store != nil && botClient.Store.ID != nil {
+			botID = getCleanID(botClient.Store.ID.User)
+		}
+
 		// =========================================================
-		// 💾 REDIS LID MAPPER (JID Mapping)
+		// ✅ REDIS LID MAPPER (LID -> JID store on every new message)
 		// =========================================================
-		go func() {
-			realJID := v.Info.Sender 
-			
-			if err == nil && contact.Found {
-			}
-		}()
+		// یہ صرف LID sender پر save کرے گا (SaveLIDJIDMapping میں already guard ہے)
+		go SaveLIDJIDMapping(botID, v.Info.Sender)
 		// =========================================================
 
 		// ✅ Save Message to Mongo (Background)
 		go func() {
-			// ✅ FIX 3: Context Added here as well inside internal calls if needed
-			botID := getCleanID(botClient.Store.ID.User)
-			saveMessageToMongo(botClient, botID, v.Info.Chat.String(), v.Info.Sender, v.Message, v.Info.IsFromMe, uint64(v.Info.Timestamp.Unix()))
+			saveMessageToMongo(
+				botClient,
+				botID,
+				v.Info.Chat.String(),
+				v.Info.Sender,
+				v.Message,
+				v.Info.IsFromMe,
+				uint64(v.Info.Timestamp.Unix()),
+			)
 		}()
 
 		// 🛑 STOP HERE FOR STATUS (Status Save ہو گیا، اب کمانڈ نہیں چلنی چاہیے)
@@ -80,7 +93,7 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 			return
 		}
 
-		// Process Commands
+		// Process Commands (recent only)
 		if isRecent {
 			go processMessage(botClient, v)
 		}
@@ -91,13 +104,16 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 				return
 			}
 
-			botID := getCleanID(botClient.Store.ID.User)
+			botID := "unknown"
+			if botClient.Store != nil && botClient.Store.ID != nil {
+				botID = getCleanID(botClient.Store.ID.User)
+			}
+
 			for _, conv := range v.Data.Conversations {
 				chatID := ""
 				if conv.ID != nil {
 					chatID = *conv.ID
 				}
-
 				if chatID == "" {
 					continue
 				}
@@ -116,14 +132,17 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 					// 👇 تاریخ (History) سے Sender نکالنا
 					senderJID := types.EmptyJID
 					if webMsg.Key != nil && webMsg.Key.Participant != nil {
-						senderJID, _ = types.ParseJID(*webMsg.Key.Participant)
+						if sj, err := types.ParseJID(*webMsg.Key.Participant); err == nil {
+							senderJID = sj
+						}
 					} else if webMsg.Key != nil && webMsg.Key.RemoteJID != nil {
-						senderJID, _ = types.ParseJID(*webMsg.Key.RemoteJID)
+						if sj, err := types.ParseJID(*webMsg.Key.RemoteJID); err == nil {
+							senderJID = sj
+						}
 					}
-					
-					// ✅ FIX 4: Pointer Dereference (*botClient.Store.ID)
-					// اگر میسج ہمارا اپنا ہے تو ID اٹھانے کے لیے * لگائیں
-					if isFromMe && botClient.Store.ID != nil {
+
+					// اگر میسج ہمارا اپنا ہے تو ID اٹھائیں
+					if isFromMe && botClient.Store != nil && botClient.Store.ID != nil {
 						senderJID = *botClient.Store.ID
 					}
 
@@ -139,41 +158,146 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 		}()
 
 	case *events.Connected:
-		if botClient.Store.ID != nil {
+		if botClient.Store != nil && botClient.Store.ID != nil {
 			fmt.Printf("🟢 [ONLINE] Bot %s connected!\n", botClient.Store.ID.User)
 		}
 	}
 }
 
+// ===============================
+// ✅ LID <-> JID Redis Mapper
+// ===============================
 
+const (
+	redisKeyLID2JID = "lid2jid"
+	redisKeyJID2LID = "jid2lid"
+)
 
-// 🔍 Helper: LID دے کر Real JID نکالنے کا فنکشن
-func GetJIDFromLID(rawLID string) (types.JID, bool) {
-	// 1. ان پٹ کو صاف کریں (اگر 123@lid ہے تو صرف 123 بچے گا)
-	// یہ لائن @ سے پہلے والا حصہ اٹھا لیتی ہے
-	cleanLID := strings.Split(rawLID, "@")[0]
-	cleanLID = strings.Split(cleanLID, ":")[0] // احتیاطاً ڈیوائس آئی ڈی بھی ہٹا دیں
-	cleanLID = strings.TrimSpace(cleanLID)
+// bot wise isolation (multi-bot safe)
+func lid2jidKey(botID, lid string) string { return "vip:" + botID + ":" + redisKeyLID2JID + ":" + lid }
+func jid2lidKey(botID, jid string) string { return "vip:" + botID + ":" + redisKeyJID2LID + ":" + jid }
 
-	// 2. Redis Key بنائیں
-	key := "lid_map:" + cleanLID
-	
-	// 3. Redis سے پوچھیں
-	val, err := rdb.Get(context.Background(), key).Result()
-	
-	// اگر نہیں ملی یا ایرر آیا
-	if err != nil || val == "" {
-		return types.EmptyJID, false
+// WhatsApp "jid string" clean: remove @server and device part after ':'
+func cleanUserOnly(raw string) string {
+	if raw == "" {
+		return ""
 	}
-	
-	// 4. سٹرنگ کو واپس JID آبجیکٹ بنائیں
-	parsed, err := types.ParseJID(val)
-	if err != nil {
-		return types.EmptyJID, false
+	// remove @server
+	left := raw
+	if i := strings.Index(left, "@"); i >= 0 {
+		left = left[:i]
 	}
-	
-	return parsed, true
+	// remove :device
+	if j := strings.Index(left, ":"); j >= 0 {
+		left = left[:j]
+	}
+	return left
 }
+
+// Canonical JID: if sender is LID, treat JID user as same number on s.whatsapp.net
+func canonicalJIDStringFromSender(sender types.JID) string {
+	// sender.User usually contains the phone-number-like id
+	u := sender.User
+	if u == "" {
+		// fallback
+		u = cleanUserOnly(sender.String())
+	}
+	if u == "" {
+		return ""
+	}
+
+	// If it's a group/status, don't map as user jid
+	// group: @g.us, status: status@broadcast
+	if sender.Server == "g.us" || sender.String() == "status@broadcast" {
+		return ""
+	}
+
+	// For LID (linked device ID), map to the real user server
+	// NOTE: in WhatsMeow sender.Server for LID is commonly "lid"
+	if sender.Server == "lid" {
+		return u + "@s.whatsapp.net"
+	}
+
+	// For normal user chats, keep it as user@server but prefer s.whatsapp.net
+	if sender.Server == "s.whatsapp.net" || sender.Server == "c.us" {
+		return u + "@s.whatsapp.net"
+	}
+
+	// fallback: keep same server
+	return u + "@" + sender.Server
+}
+
+// Save mapping LID -> JID and reverse JID -> LID
+func SaveLIDJIDMapping(botID string, lidJID types.JID) {
+	if rdb == nil {
+		return
+	}
+	// We only store when it is actually an LID sender
+	if lidJID.Server != "lid" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	lid := lidJID.User
+	if lid == "" {
+		lid = cleanUserOnly(lidJID.String())
+	}
+	if lid == "" {
+		return
+	}
+
+	jid := canonicalJIDStringFromSender(lidJID) // lidUser@s.whatsapp.net
+	if jid == "" {
+		return
+	}
+
+	// ✅ no expiry (persistent)
+	_ = rdb.Set(ctx, lid2jidKey(botID, lid), jid, 0).Err()
+	_ = rdb.Set(ctx, jid2lidKey(botID, cleanUserOnly(jid)), lid, 0).Err()
+}
+
+// Get JID by LID (returns full JID like 923xx@s.whatsapp.net)
+func GetJIDByLID(botID, lid string) (string, bool) {
+	if rdb == nil {
+		return "", false
+	}
+	lid = cleanUserOnly(lid)
+	if lid == "" {
+		return "", false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	val, err := rdb.Get(ctx, lid2jidKey(botID, lid)).Result()
+	if err != nil || val == "" {
+		return "", false
+	}
+	return val, true
+}
+
+// Get LID by JID/number (returns lid user only)
+func GetLIDByJID(botID, jid string) (string, bool) {
+	if rdb == nil {
+		return "", false
+	}
+	jidUser := cleanUserOnly(jid)
+	if jidUser == "" {
+		return "", false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	val, err := rdb.Get(ctx, jid2lidKey(botID, jidUser)).Result()
+	if err != nil || val == "" {
+		return "", false
+	}
+	return val, true
+}
+
 
 
 func isKnownCommand(text string) bool {
