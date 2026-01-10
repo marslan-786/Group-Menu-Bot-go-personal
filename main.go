@@ -41,7 +41,7 @@ type ChatMessage struct {
 	SenderName string    `bson:"sender_name" json:"sender_name"`
 	MessageID  string    `bson:"message_id" json:"message_id"`
 	Timestamp  time.Time `bson:"timestamp" json:"timestamp"`
-	Type       string    `bson:"type" json:"type"` 
+	Type       string    `bson:"type" json:"type"`
 	Content    string    `bson:"content" json:"content"`
 	IsFromMe   bool      `bson:"is_from_me" json:"is_from_me"`
 	IsGroup    bool      `bson:"is_group" json:"is_group"`
@@ -52,7 +52,7 @@ type ChatMessage struct {
 type ChatItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	Type string `json:"type"` 
+	Type string `json:"type"`
 }
 
 var (
@@ -292,13 +292,15 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waP
 	isChannel := strings.Contains(chatID, "@newsletter")
 
 	jid, _ := types.ParseJID(chatID)
-	
+
+	// ✅ Smart Name Lookup: Check Contact Store first
 	if contact, err := client.Store.Contacts.GetContact(context.Background(), jid); err == nil && contact.Found {
 		senderName = contact.FullName
 		if senderName == "" {
 			senderName = contact.PushName
 		}
 	} else {
+		// Fallback
 		if contact, err := client.Store.Contacts.GetContact(context.Background(), jid); err == nil {
 			senderName = contact.PushName
 		}
@@ -460,7 +462,7 @@ func updatePrefixDB(botID string, newPrefix string) {
 }
 
 func serveHTML(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "web/lists.html")
+	http.ServeFile(w, r, "web/index.html")
 }
 
 func servePicture(w http.ResponseWriter, r *http.Request) {
@@ -493,6 +495,23 @@ func broadcastWS(data interface{}) {
 	for conn := range wsClients {
 		conn.WriteJSON(data)
 	}
+}
+
+// ✅ handleDeleteSession (Fixed & Included)
+func handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	if client != nil && client.IsConnected() {
+		client.Disconnect()
+	}
+	devices, _ := container.GetAllDevices(context.Background())
+	for _, device := range devices {
+		device.Delete(context.Background())
+	}
+	broadcastWS(map[string]interface{}{
+		"event":     "session_deleted",
+		"connected": false,
+	})
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprintf(w, `{"success":true,"message":"Session deleted"}`)
 }
 
 func handleDelAllAPI(w http.ResponseWriter, r *http.Request) {
@@ -791,9 +810,10 @@ func monitorNewSessions(container *sqlstore.Container) {
 	}
 }
 
-// -----------------------------------------------------
-// 🔥 WEB API HANDLERS (UPDATED NAMES & SCROLL LOGIC)
-// -----------------------------------------------------
+// ✅ serveListsHTML (Fixed & Included)
+func serveListsHTML(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "web/lists.html")
+}
 
 func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 	clientsMutex.RLock()
@@ -845,16 +865,11 @@ func handleGetChats(w http.ResponseWriter, r *http.Request) {
 		if isConnected && client != nil {
 			jid, _ := types.ParseJID(chatID)
 
-			if chatType == "group" {
-				if info, err := client.Store.ChatSettings.GetChatSettings(jid); err == nil && info.Name != "" {
-					cleanName = info.Name
-				}
-			} else if chatType == "user" {
-				if contact, err := client.Store.Contacts.GetContact(context.Background(), jid); err == nil && contact.Found {
-					cleanName = contact.FullName
-					if cleanName == "" {
-						cleanName = contact.PushName
-					}
+			// ✅ FIX: Use Contacts for name lookup (works for users & groups in whatsmeow)
+			if contact, err := client.Store.Contacts.GetContact(context.Background(), jid); err == nil && contact.Found {
+				cleanName = contact.FullName
+				if cleanName == "" {
+					cleanName = contact.PushName
 				}
 			}
 		}
@@ -914,7 +929,6 @@ func handleGetMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 🚀 OPTIMIZATION: Strip Base64 Data
 	for i := range messages {
 		if len(messages[i].Content) > 500 && strings.HasPrefix(messages[i].Content, "data:") {
 			messages[i].Content = "MEDIA_WAITING"
@@ -966,6 +980,7 @@ func handleGetAvatar(w http.ResponseWriter, r *http.Request) {
 
 	jid, _ := types.ParseJID(chatID)
 
+	// ✅ FIX: Added context.Background()
 	pic, err := client.GetProfilePictureInfo(context.Background(), jid, &whatsmeow.GetProfilePictureParams{
 		Preview: true,
 	})
