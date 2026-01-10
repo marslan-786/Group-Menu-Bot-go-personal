@@ -826,7 +826,6 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(sessions)
 }
 
-// 3. Get Chats (UPDATED: Channels & Group Names Fix)
 func handleGetChats(w http.ResponseWriter, r *http.Request) {
 	if chatHistoryCollection == nil { http.Error(w, "MongoDB not connected", 500); return }
 	botID := r.URL.Query().Get("bot_id")
@@ -926,8 +925,6 @@ func handleGetChats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(chatList)
 }
-
-
 
 func handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	if chatHistoryCollection == nil {
