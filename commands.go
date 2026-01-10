@@ -176,28 +176,6 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 }
 
 
-// Get LID by JID/number (returns lid user only)
-func GetJIDFromLID(botID, jid string) (string, bool) {
-	if rdb == nil {
-		return "", false
-	}
-	jidUser := cleanUserOnly(jid)
-	if jidUser == "" {
-		return "", false
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	val, err := rdb.Get(ctx, jid2lidKey(botID, jidUser)).Result()
-	if err != nil || val == "" {
-		return "", false
-	}
-	return val, true
-}
-
-
-
 func isKnownCommand(text string) bool {
 	commands := []string{
 		"menu", "help", "list", "ping", "id", "owner", "data", "listbots",
