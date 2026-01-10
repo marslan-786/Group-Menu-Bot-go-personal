@@ -796,28 +796,6 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
     json.NewEncoder(w).Encode(sessions)
 }
 
-// 3. Get Chats (Unique ChatIDs from Mongo for a Bot)
-func handleGetChats(w http.ResponseWriter, r *http.Request) {
-	if chatHistoryCollection == nil {
-		http.Error(w, "MongoDB not connected", 500)
-		return
-	}
-	botID := r.URL.Query().Get("bot_id")
-	if botID == "" {
-		http.Error(w, "Bot ID required", 400)
-		return
-	}
-
-	filter := bson.M{"bot_id": botID}
-	// ✅ FIX: Using chatHistoryCollection
-	chats, err := chatHistoryCollection.Distinct(context.Background(), "chat_id", filter)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(chats)
-}
 
 // 4. Get Messages (Lightweight - No Base64)
 func handleGetMessages(w http.ResponseWriter, r *http.Request) {
