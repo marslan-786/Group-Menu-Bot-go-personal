@@ -356,10 +356,14 @@ func handleSendTextV2(w http.ResponseWriter, r *http.Request) {
 }
 
 // Send Media (Image, Video, Audio, Document, Animated Sticker)
+// 🚀 FIXED: Handle Send Media V2 (Correct Field Names)
 func handleSendMediaV2(w http.ResponseWriter, r *http.Request) {
 	// Parse Multipart Form
 	err := r.ParseMultipartForm(50 << 20) // 50MB max
-	if err != nil { http.Error(w, "File too big", 400); return }
+	if err != nil {
+		http.Error(w, "File too big", 400)
+		return
+	}
 
 	botID := r.FormValue("bot_id")
 	chatID := r.FormValue("chat_id")
@@ -367,7 +371,10 @@ func handleSendMediaV2(w http.ResponseWriter, r *http.Request) {
 	isAnimated := r.FormValue("is_animated") == "true" // For stickers
 
 	file, header, err := r.FormFile("file")
-	if err != nil { http.Error(w, "File missing", 400); return }
+	if err != nil {
+		http.Error(w, "File missing", 400)
+		return
+	}
 	defer file.Close()
 
 	fileBytes, _ := io.ReadAll(file)
@@ -376,53 +383,74 @@ func handleSendMediaV2(w http.ResponseWriter, r *http.Request) {
 	bot, ok := activeClients[botID]
 	clientsMutex.RUnlock()
 
-	if !ok { http.Error(w, "Bot offline", 404); return }
+	if !ok {
+		http.Error(w, "Bot offline", 404)
+		return
+	}
 
 	jid, _ := types.ParseJID(chatID)
 	var msg *waProto.Message
 
 	// Upload & Create Message
 	ctx := context.Background()
-	
+
 	switch mediaType {
 	case "image":
 		uploaded, _ := bot.Upload(ctx, fileBytes, whatsmeow.MediaImage)
 		msg = &waProto.Message{ImageMessage: &waProto.ImageMessage{
-			Url: &uploaded.URL, DirectPath: &uploaded.DirectPath,
-			MediaKey: uploaded.MediaKey, Mimetype: &header.Header["Content-Type"][0],
-			FileSha256: uploaded.FileSHA256, FileEncSha256: uploaded.FileEncSHA256,
-			FileLength: &uploaded.FileLength,
+			URL:           &uploaded.URL,        // ✅ FIXED: Url -> URL
+			DirectPath:    &uploaded.DirectPath,
+			MediaKey:      uploaded.MediaKey,
+			Mimetype:      &header.Header["Content-Type"][0],
+			FileSHA256:    uploaded.FileSHA256,    // ✅ FIXED: FileSha256 -> FileSHA256
+			FileEncSHA256: uploaded.FileEncSHA256, // ✅ FIXED: FileEncSha256 -> FileEncSHA256
+			FileLength:    &uploaded.FileLength,
 		}}
 	case "sticker":
 		// Auto-convert needs external lib, assuming webp sent for now
 		uploaded, _ := bot.Upload(ctx, fileBytes, whatsmeow.MediaImage)
 		msg = &waProto.Message{StickerMessage: &waProto.StickerMessage{
-			Url: &uploaded.URL, DirectPath: &uploaded.DirectPath,
-			MediaKey: uploaded.MediaKey, Mimetype: &header.Header["Content-Type"][0],
-			FileSha256: uploaded.FileSHA256, FileEncSha256: uploaded.FileEncSHA256,
-			FileLength: &uploaded.FileLength, IsAnimated: &isAnimated,
+			URL:           &uploaded.URL,
+			DirectPath:    &uploaded.DirectPath,
+			MediaKey:      uploaded.MediaKey,
+			Mimetype:      &header.Header["Content-Type"][0],
+			FileSHA256:    uploaded.FileSHA256,
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileLength:    &uploaded.FileLength,
+			IsAnimated:    &isAnimated,
 		}}
 	case "video":
 		uploaded, _ := bot.Upload(ctx, fileBytes, whatsmeow.MediaVideo)
 		msg = &waProto.Message{VideoMessage: &waProto.VideoMessage{
-			Url: &uploaded.URL, DirectPath: &uploaded.DirectPath,
-			MediaKey: uploaded.MediaKey, Mimetype: &header.Header["Content-Type"][0],
-			FileSha256: uploaded.FileSHA256, FileEncSha256: uploaded.FileEncSHA256,
-			FileLength: &uploaded.FileLength,
+			URL:           &uploaded.URL,
+			DirectPath:    &uploaded.DirectPath,
+			MediaKey:      uploaded.MediaKey,
+			Mimetype:      &header.Header["Content-Type"][0],
+			FileSHA256:    uploaded.FileSHA256,
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileLength:    &uploaded.FileLength,
 		}}
 	case "audio":
 		uploaded, _ := bot.Upload(ctx, fileBytes, whatsmeow.MediaAudio)
 		ptt := true // Voice note
 		msg = &waProto.Message{AudioMessage: &waProto.AudioMessage{
-			Url: &uploaded.URL, DirectPath: &uploaded.DirectPath,
-			MediaKey: uploaded.MediaKey, Mimetype: &header.Header["Content-Type"][0],
-			FileSha256: uploaded.FileSHA256, FileEncSha256: uploaded.FileEncSHA256,
-			FileLength: &uploaded.FileLength, Ptt: &ptt,
+			URL:           &uploaded.URL,
+			DirectPath:    &uploaded.DirectPath,
+			MediaKey:      uploaded.MediaKey,
+			Mimetype:      &header.Header["Content-Type"][0],
+			FileSHA256:    uploaded.FileSHA256,
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileLength:    &uploaded.FileLength,
+			Ptt:           &ptt,
 		}}
 	}
 
 	if msg != nil {
-		resp, _ := bot.SendMessage(ctx, jid, msg)
+		resp, err := bot.SendMessage(ctx, jid, msg)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{"status": "sent", "id": resp.ID})
 	} else {
 		http.Error(w, "Invalid media type", 400)
