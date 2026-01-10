@@ -7,65 +7,153 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
         /* --- CORE --- */
-        :root { --bg-dark: #0f172a; --bg-glass: rgba(15, 23, 42, 0.95); --primary: #00a884; --text-main: #e9edef; --text-muted: #8696a0; --bubble-sent: #005c4b; --bubble-rec: #202c33; }
+        :root {
+            --bg-dark: #111b21; /* Authentic WA Dark BG */
+            --bg-glass: rgba(32, 44, 51, 0.95);
+            --primary: #00a884;
+            --text-main: #e9edef;
+            --text-muted: #8696a0;
+            --bubble-sent: #005c4b;
+            --bubble-rec: #202c33;
+            --border-col: #222d34;
+        }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { margin: 0; font-family: 'Inter', sans-serif; background: #0b141a; color: var(--text-main); height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
-        ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-thumb { background: #374045; border-radius: 3px; }
-
-        /* HOME */
-        #home-view { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto; }
-        .session-card { background: #202c33; width: 100%; max-width: 350px; padding: 15px; border-radius: 12px; display: flex; align-items: center; gap: 15px; margin-bottom: 15px; cursor: pointer; border: 1px solid #374045; }
+        body { margin: 0; font-family: 'Inter', sans-serif; background: var(--bg-dark); color: var(--text-main); height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
         
-        /* APP */
+        /* UI Elements */
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-thumb { background: #374045; border-radius: 3px; }
+
+        /* --- 1. AUTHENTIC SPLASH SCREEN --- */
+        #splash {
+            position: fixed; inset: 0; z-index: 9999;
+            background: var(--bg-dark);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            transition: opacity 0.5s ease-out;
+        }
+        .wa-logo { width: 80px; margin-bottom: 20px; }
+        .loading-bar-container {
+            width: 250px; height: 3px; background: #2a3942; border-radius: 3px; overflow: hidden; margin-top: 10px;
+        }
+        .loading-bar-fill {
+            width: 30%; height: 100%; background: var(--primary);
+            animation: progress 1.5s infinite ease-in-out;
+        }
+        .encrypted-text {
+            position: absolute; bottom: 40px; font-size: 11px; color: var(--text-muted);
+            display: flex; flex-direction: column; align-items: center; gap: 5px;
+        }
+        .lock-icon { font-size: 10px; }
+
+        @keyframes progress { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
+
+        /* --- 2. HOME (SESSION SELECTION) --- */
+        #home-view { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; padding: 20px; overflow-y: auto; }
+        .hero-title { margin-top: 40px; color: var(--text-main); font-weight: 300; font-size: 22px; margin-bottom: 30px; letter-spacing: 1px; }
+        .session-card {
+            background: #202c33; width: 100%; max-width: 380px; padding: 18px; border-radius: 12px;
+            display: flex; align-items: center; gap: 15px; margin-bottom: 12px; cursor: pointer;
+            border: 1px solid var(--border-col); transition: transform 0.2s;
+        }
+        .session-card:hover { background: #2a3942; transform: translateY(-2px); }
+        .phone-icon { font-size: 24px; color: var(--primary); background: rgba(0, 168, 132, 0.1); width: 45px; height: 45px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+
+        /* --- 3. APP LAYOUT --- */
         #app-view { display: none; width: 100%; height: 100%; position: relative; }
-        .sidebar { width: 100%; height: 100%; display: flex; flex-direction: column; background: #111b21; }
-        .app-header { height: 60px; background: #202c33; display: flex; justify-content: space-between; align-items: center; padding: 0 15px; }
-        .tabs { display: flex; background: #202c33; }
-        .tab-btn { flex: 1; padding: 12px; border: none; background: none; color: var(--text-muted); border-bottom: 3px solid transparent; font-weight: 500; cursor: pointer; }
+        .sidebar { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--bg-dark); border-right: 1px solid var(--border-col); }
+        
+        .app-header { height: 60px; background: #202c33; display: flex; justify-content: space-between; align-items: center; padding: 0 16px; border-bottom: 1px solid var(--border-col); }
+        .tabs { display: flex; background: var(--bg-dark); border-bottom: 1px solid var(--border-col); }
+        .tab-btn { flex: 1; padding: 14px; border: none; background: none; color: var(--text-muted); font-weight: 500; cursor: pointer; border-bottom: 3px solid transparent; transition: 0.2s; }
         .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
 
-        .chat-list { flex: 1; overflow-y: auto; padding-bottom: 150px; } /* 🔥 Extra Padding for Scroll */
-        .chat-item { display: flex; padding: 12px 15px; align-items: center; gap: 15px; border-bottom: 1px solid #222d34; cursor: pointer; }
+        .chat-list { flex: 1; overflow-y: auto; padding-bottom: 100px; }
+        .chat-item { display: flex; padding: 12px 15px; align-items: center; gap: 15px; border-bottom: 1px solid var(--border-col); cursor: pointer; transition: 0.2s; }
         .chat-item:hover { background: #202c33; }
-        .avatar { width: 50px; height: 50px; border-radius: 50%; background: #6a7f8a; object-fit: cover; flex-shrink: 0; }
+        .avatar { width: 48px; height: 48px; border-radius: 50%; background: #6a7f8a; object-fit: cover; flex-shrink: 0; }
         
-        /* CHAT WINDOW */
-        #chat-window { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #0b141a; z-index: 50; display: flex; flex-direction: column; transform: translateX(100%); transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1); }
-        .chat-nav { height: 60px; background: #202c33; display: flex; align-items: center; padding: 0 10px; gap: 10px; }
-        .messages-area { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 8px; background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png'); opacity: 0.95; padding-bottom: 100px; }
+        /* Loading States (List) */
+        .loading-state {
+            display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-muted); gap: 15px;
+        }
+        .spinner-circle {
+            width: 30px; height: 30px; border: 3px solid #2a3942; border-top-color: var(--primary);
+            border-radius: 50%; animation: spin 0.8s linear infinite;
+        }
 
-        /* BUBBLES */
-        .msg { max-width: 80%; padding: 6px 8px; border-radius: 8px; font-size: 14.5px; position: relative; box-shadow: 0 1px 0.5px rgba(0,0,0,0.13); color: #e9edef; line-height: 1.4; word-wrap: break-word; }
+        /* --- 4. CHAT WINDOW --- */
+        #chat-window {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #0b141a;
+            z-index: 50; display: flex; flex-direction: column; 
+            transform: translateX(100%); transition: transform 0.3s cubic-bezier(0.33, 1, 0.68, 1);
+        }
+        .chat-nav { height: 60px; background: #202c33; display: flex; align-items: center; padding: 0 10px; gap: 10px; border-bottom: 1px solid var(--border-col); box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+        .back-btn { font-size: 24px; background: none; border: none; color: var(--text-main); cursor: pointer; padding: 5px 10px; }
+        
+        .messages-area {
+            flex: 1; overflow-y: auto; padding: 20px 15px; display: flex; flex-direction: column; gap: 4px;
+            background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png');
+            opacity: 0.95; padding-bottom: 80px;
+        }
+
+        /* Bubbles */
+        .msg { max-width: 80%; padding: 6px 9px; border-radius: 8px; font-size: 14.5px; position: relative; box-shadow: 0 1px 0.5px rgba(0,0,0,0.13); color: #e9edef; line-height: 1.4; margin-bottom: 2px; }
         .msg.sent { align-self: flex-end; background: var(--bubble-sent); border-top-right-radius: 0; }
         .msg.rec { align-self: flex-start; background: var(--bubble-rec); border-top-left-radius: 0; }
         .sender-name { font-size: 12px; color: #aebac1; font-weight: bold; display: block; margin-bottom: 4px; }
-        .time { font-size: 10px; color: rgba(255,255,255,0.6); float: right; margin: 5px 0 0 8px; }
+        .time { font-size: 10px; color: rgba(255,255,255,0.6); float: right; margin: 8px 0 0 8px; }
 
-        /* MEDIA */
+        /* Media UI */
+        .media-container { position: relative; border-radius: 6px; overflow: hidden; margin: 2px 0; border: 1px solid rgba(255,255,255,0.05); }
+        .img-placeholder {
+            width: 240px; height: 160px; background: #2a3942; 
+            display: flex; align-items: center; justify-content: center; flex-direction: column; cursor: pointer;
+        }
+        .audio-box { display: flex; align-items: center; gap: 12px; width: 260px; height: 50px; background: rgba(0,0,0,0.15); border-radius: 8px; padding: 0 12px; }
+        .control-btn {
+            width: 38px; height: 38px; border-radius: 50%; background: #6a7f8a; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center; cursor: pointer;
+        }
+        
         img.chat-img { max-width: 100%; border-radius: 6px; cursor: pointer; display: block; }
         video.chat-vid { max-width: 100%; border-radius: 6px; }
-        .audio-player { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; min-width: 200px; }
         audio { height: 35px; width: 100%; filter: invert(0.9); }
-        .file-link { text-decoration: none; color: white; display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; }
+        .spinner-mini { width: 20px; height: 20px; border: 2px solid rgba(255,255,255,0.3); border-top: 2px solid white; border-radius: 50%; animation: spin 0.8s linear infinite; }
 
         /* Lightbox */
-        #lightbox { display: none; position: fixed; inset: 0; background: black; z-index: 100; align-items: center; justify-content: center; }
-        #lightbox img { max-width: 100%; max-height: 100%; }
-        .lb-close { position: absolute; top: 20px; left: 20px; color: white; font-size: 30px; cursor: pointer; }
+        #lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 100; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.2s; }
+        #lightbox.active { opacity: 1; }
+        #lightbox img { max-width: 100%; max-height: 100%; border-radius: 4px; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        .lb-close { position: absolute; top: 20px; left: 20px; color: white; font-size: 30px; cursor: pointer; background: rgba(0,0,0,0.3); width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
     </style>
 </head>
 <body>
 
-    <div id="home-view">
-        <h2 style="color:var(--primary);">ACTIVE SESSIONS</h2>
-        <div id="session-list" style="width:100%;"></div>
+    <div id="splash">
+        <svg class="wa-logo" viewBox="0 0 33 33" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M16.6 0C7.4 0 0 7.4 0 16.5C0 20 1.1 23.3 3.1 26L1 33L8.2 30.8C10.7 32.2 13.6 33 16.6 33C25.7 33 33.1 25.6 33.1 16.5C33.1 7.4 25.7 0 16.6 0ZM16.6 27.7C14.1 27.7 11.8 27 9.8 25.8L9.3 25.5L4.8 26.9L6.2 22.6L5.8 22C4.5 19.9 3.8 17.5 3.8 15C3.8 7.9 9.6 2.2 16.6 2.2C23.6 2.2 29.4 7.9 29.4 15C29.4 22.1 23.6 27.7 16.6 27.7Z" fill="#00a884"/>
+            <path d="M22.3 19.3C22 19.1 20.6 18.4 20.3 18.3C20.1 18.2 19.9 18.1 19.7 18.4C19.5 18.7 19 19.3 18.8 19.5C18.7 19.7 18.5 19.7 18.2 19.6C17.9 19.4 16.9 19.1 15.8 18.1C14.9 17.3 14.3 16.3 14.1 16C13.9 15.7 14.1 15.5 14.2 15.4C14.4 15.2 14.5 15.1 14.7 14.9C14.8 14.7 14.9 14.6 15 14.4C15.1 14.2 15 14 14.9 13.9C14.9 13.7 14.3 12.3 14 11.7C13.8 11.2 13.5 11.2 13.3 11.2H12.8C12.6 11.2 12.2 11.3 11.8 11.7C11.4 12.1 10.4 13.1 10.4 15.1C10.4 17.1 11.9 19 12.1 19.3C12.3 19.6 15.1 23.9 19.4 25.8C20.4 26.2 21.2 26.5 21.8 26.7C22.8 27 23.7 27 24.5 26.9C25.4 26.7 27.2 25.8 27.6 24.7C28 23.6 28 22.7 27.9 22.5C27.8 22.4 27.6 22.3 27.3 22.1" fill="white"/>
+        </svg>
+        <div class="loading-bar-container"><div class="loading-bar-fill"></div></div>
+        <div class="encrypted-text">
+            <span class="lock-icon">🔒</span> End-to-end encrypted
+        </div>
+    </div>
+
+    <div id="home-view" style="display:none;">
+        <h2 class="hero-title">Select Account</h2>
+        <div id="session-list" style="width:100%; display:flex; flex-direction:column; align-items:center;">
+            </div>
     </div>
 
     <div id="app-view">
         <div class="sidebar">
             <div class="app-header">
-                <span style="font-weight:bold; font-size:20px; color:#8696a0;">WhatsApp</span>
-                <button onclick="location.reload()" style="background:none; border:none; color:#f15c6d;">LOGOUT</button>
+                <span style="font-weight:600; font-size:18px;">WhatsApp</span>
+                <button onclick="location.reload()" style="background:none; border:none; color:#f15c6d; font-weight:600; cursor:pointer;">EXIT</button>
             </div>
             <div class="tabs">
                 <button class="tab-btn active" onclick="switchTab('chats')">Chats</button>
@@ -77,48 +165,81 @@
 
         <div id="chat-window">
             <div class="chat-nav">
-                <button onclick="document.getElementById('chat-window').style.transform='translateX(100%)'" style="font-size:24px; background:none; border:none; color:white;">←</button>
+                <button class="back-btn" onclick="closeChat()">←</button>
                 <img id="header-avatar" class="avatar" src="">
-                <span id="header-name" style="font-weight:bold; font-size:16px; margin-left:10px;">User</span>
+                <span id="header-name" style="font-weight:600; font-size:16px;">User</span>
             </div>
             <div class="messages-area" id="msg-box"></div>
         </div>
     </div>
 
     <div id="lightbox">
-        <div class="lb-close" onclick="document.getElementById('lightbox').style.display='none'">×</div>
+        <div class="lb-close" onclick="document.getElementById('lightbox').classList.remove('active'); setTimeout(()=>document.getElementById('lightbox').style.display='none', 200);">×</div>
         <img id="lb-img" src="">
     </div>
 
     <script>
-        // --- 🟢 DATABASE (IndexedDB) for caching ---
-        const dbName="WA_Cache_DB"; let db;
+        // --- 🟢 DATABASE ---
+        const dbName="WA_Pro_DB"; let db;
         const req=indexedDB.open(dbName,1);
         req.onupgradeneeded=e=>{db=e.target.result;db.createObjectStore("media",{keyPath:"id"});};
         req.onsuccess=e=>{db=e.target.result;};
-        
         function saveLocal(id,c){if(db)db.transaction(["media"],"readwrite").objectStore("media").put({id,c});}
         function getLocal(id,cb){if(!db)return cb(null);db.transaction(["media"],"readonly").objectStore("media").get(id).onsuccess=e=>cb(e.target.result?e.target.result.c:null);}
 
+        // --- STATE ---
         let currentBot=null, allChats=[], activeTab='chats';
 
-        window.onload=()=>{ loadSessions(); }
+        // --- INIT ---
+        window.onload=()=>{
+            // Simulate Loading
+            setTimeout(() => {
+                document.getElementById('splash').style.opacity = '0';
+                setTimeout(() => {
+                    document.getElementById('splash').style.display = 'none';
+                    document.getElementById('home-view').style.display = 'flex';
+                    loadSessions();
+                }, 500);
+            }, 2500);
+        };
 
+        // --- 1. SESSION LIST ---
         function loadSessions() {
             fetch('/api/sessions').then(r=>r.json()).then(res=>{
                 const box=document.getElementById('session-list'); box.innerHTML='';
+                if(res.length===0) box.innerHTML='<div style="color:#8696a0; margin-top:20px;">No active sessions found.</div>';
+                
                 res.forEach(num=>{
-                    box.innerHTML+=`<div class="session-card" onclick="startApp('${num}')">
-                    <div style="background:#00a884;color:white;width:45px;height:45px;border-radius:50%;display:flex;align-items:center;justify-content:center;">📱</div>
-                    <div><div style="font-weight:bold;color:white;">${num}</div><div style="font-size:12px;color:#8696a0;">Tap to open</div></div></div>`;
+                    box.innerHTML+=`
+                    <div class="session-card" onclick="startApp('${num}')">
+                        <div class="phone-icon">📱</div>
+                        <div style="flex:1;">
+                            <div style="font-weight:500; font-size:16px;">${num}</div>
+                            <div style="font-size:13px; color:var(--text-muted);">Tap to connect</div>
+                        </div>
+                        <div style="width:8px; height:8px; background:#00ff00; border-radius:50%; box-shadow:0 0 5px #00ff00;"></div>
+                    </div>`;
                 });
             });
         }
 
-        function startApp(id){ currentBot=id; document.getElementById('home-view').style.display='none'; document.getElementById('app-view').style.display='block'; loadChats(); }
+        function startApp(id){
+            currentBot=id;
+            document.getElementById('home-view').style.display='none';
+            document.getElementById('app-view').style.display='block';
+            loadChats();
+        }
 
+        // --- 2. CHAT LIST (Advanced Loading) ---
         async function loadChats(){
-            document.getElementById('chat-list-box').innerHTML='<div style="text-align:center;padding:20px;color:#666;">Syncing...</div>';
+            const box = document.getElementById('chat-list-box');
+            // Advanced Loading Animation
+            box.innerHTML = `
+            <div class="loading-state">
+                <div class="spinner-circle"></div>
+                <div style="font-size:14px;">Loading Chats...</div>
+            </div>`;
+            
             const res=await fetch(`/api/chats?bot_id=${currentBot}`);
             allChats=await res.json();
             renderList();
@@ -131,29 +252,59 @@
                 if(activeTab==='channels')return c.type==='channel';
                 return c.type==='user';
             });
+            
+            if(filtered.length === 0) {
+                list.innerHTML='<div style="text-align:center; padding:30px; color:#8696a0;">No chats available</div>';
+                return;
+            }
+
             filtered.forEach(c=>{
                 const aid=`av_${c.id.replace(/[^a-zA-Z0-9]/g,'')}`;
-                list.innerHTML+=`<div class="chat-item" onclick="openChat('${c.id}','${c.name}','${aid}')">
-                <img id="${aid}" class="avatar" src="https://ui-avatars.com/api/?name=${c.name}&background=random">
-                <div style="flex:1;overflow:hidden;"><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.name}</div>
-                <div style="font-size:13px;color:#8696a0;">${c.id}</div></div></div>`;
+                list.innerHTML+=`
+                <div class="chat-item" onclick="openChat('${c.id}','${c.name}','${aid}')">
+                    <img id="${aid}" class="avatar" src="https://ui-avatars.com/api/?name=${c.name}&background=00a884&color=fff">
+                    <div style="flex:1; overflow:hidden;">
+                        <div style="font-weight:500; font-size:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${c.name}</div>
+                        <div style="font-size:13px; color:var(--text-muted);">${c.id.split('@')[0]}</div>
+                    </div>
+                </div>`;
+                // Lazy Avatar
                 fetch(`/api/avatar?bot_id=${currentBot}&chat_id=${c.id}`).then(r=>r.json()).then(d=>{if(d.url)document.getElementById(aid).src=d.url;}).catch(()=>{});
             });
         }
 
-        function switchTab(t){ activeTab=t; document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active')); event.target.classList.add('active'); renderList(); }
+        function switchTab(t){
+            activeTab=t;
+            document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+            event.target.classList.add('active');
+            renderList();
+        }
 
+        // --- 3. MESSAGES (Decrypting Animation) ---
         async function openChat(cid,name,aid){
             document.getElementById('header-name').innerText=name;
             const src=document.getElementById(aid)?document.getElementById(aid).src:`https://ui-avatars.com/api/?name=${name}`;
             document.getElementById('header-avatar').src=src;
             
-            const win=document.getElementById('chat-window'); win.style.transform='translateX(0)';
-            const box=document.getElementById('msg-box'); box.innerHTML='<div style="text-align:center;padding:50px;">Loading History...</div>';
+            const win=document.getElementById('chat-window');
+            win.style.transform='translateX(0)';
+            
+            const box=document.getElementById('msg-box');
+            // Decrypting Animation
+            box.innerHTML=`
+            <div class="loading-state" style="margin-top:50px;">
+                <div class="spinner-circle"></div>
+                <div style="font-size:13px; letter-spacing:0.5px;">Decrypting messages...</div>
+            </div>`;
 
             const res=await fetch(`/api/messages?bot_id=${currentBot}&chat_id=${cid}`);
             const msgs=await res.json();
             box.innerHTML='';
+
+            if(!msgs || msgs.length===0) {
+                box.innerHTML='<div style="text-align:center; margin-top:20px; color:#8696a0; font-size:12px; background:rgba(32,44,51,0.5); padding:10px; border-radius:8px; width:fit-content; margin:20px auto;">🔒 Messages are end-to-end encrypted. No history found on server.</div>';
+                return;
+            }
 
             msgs.forEach(m=>{
                 let c='';
@@ -161,54 +312,94 @@
                 const time=new Date(m.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
                 const nameTag=(!m.is_from_me && m.is_group)?`<span class="sender-name">${m.sender_name}</span>`:'';
 
-                if(m.type==='text') {
-                    c=m.content;
-                    renderMsg(box, t, nameTag, c, time);
-                }
-                else if(m.type==='image' || m.type==='audio') {
-                    // 🔥 CACHE LOGIC: Check DB first
-                    getLocal(m.message_id, (cachedData) => {
-                        if(cachedData) {
-                            // Found locally
-                            renderMedia(box, t, nameTag, m.type, cachedData, time);
-                        } else {
-                            // Not found, use incoming API data & Save
-                            saveLocal(m.message_id, m.content);
-                            renderMedia(box, t, nameTag, m.type, m.content, time);
-                        }
-                    });
-                }
-                else if(m.type==='video') {
-                     // Catbox links don't need caching base64
-                     c=`<video src="${m.content}" class="chat-vid" controls></video>`;
-                     renderMsg(box, t, nameTag, c, time);
-                }
-                else {
-                     c=`<a href="${m.content}" target="_blank" class="file-link">📄 Document</a>`;
-                     renderMsg(box, t, nameTag, c, time);
-                }
+                if(m.type==='text') c=m.content;
+                else if(m.type==='image') c=renderImage(m);
+                else if(m.type==='audio') c=renderAudio(m);
+                else if(m.type==='video') c=`<video src="${m.content}" class="chat-vid" controls></video>`;
+                else c=`<a href="${m.content}" target="_blank" style="color:#00a884; font-weight:500; text-decoration:none;">📄 Document File</a>`;
+
+                box.innerHTML+=`<div class="msg ${t}">${nameTag} ${c} <span class="time">${time}</span></div>`;
             });
-            setTimeout(() => box.scrollTop=box.scrollHeight, 100);
+            
+            // Smooth Scroll
+            setTimeout(() => box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' }), 100);
         }
 
-        function renderMsg(box, type, nameTag, content, time) {
-            const div = document.createElement('div');
-            div.className = `msg ${type}`;
-            div.innerHTML = `${nameTag} ${content} <span class="time">${time}</span>`;
-            box.appendChild(div);
-        }
+        // --- MEDIA HANDLERS (AUTO CACHE & LOAD) ---
 
-        function renderMedia(box, type, nameTag, mediaType, src, time) {
-            let content = '';
-            if(mediaType === 'image') {
-                content = `<img src="${src}" class="chat-img" onclick="showLightbox(this.src)">`;
-            } else {
-                content = `<div class="audio-player">🎤 <audio src="${src}" controls></audio></div>`;
+        function renderImage(m) {
+            const uid = m.message_id;
+            
+            // Check IndexedDB
+            setTimeout(()=>{
+                getLocal(uid, (data)=>{
+                    if(data) {
+                        // Already downloaded
+                        document.getElementById(`img-wrap-${uid}`).innerHTML=`<img src="${data}" class="chat-img" onclick="viewImage(this.src)">`;
+                    } else {
+                        // Not found locally? Try fetching from server (Auto Load)
+                        if(m.content === 'MEDIA_WAITING') {
+                            downloadMedia(uid, 'image', `img-wrap-${uid}`);
+                        }
+                    }
+                });
+            }, 10);
+
+            // Initial Placeholder
+            if(m.content === 'MEDIA_WAITING') {
+                return `<div id="img-wrap-${uid}" class="media-container"><div class="img-placeholder"><div class="spinner-mini"></div><div style="font-size:11px; margin-top:5px; color:#8696a0;">Loading...</div></div></div>`;
             }
-            renderMsg(box, type, nameTag, content, time);
+            // If direct base64/link
+            return `<img src="${m.content}" class="chat-img" onclick="viewImage(this.src)">`;
         }
 
-        function showLightbox(src){ document.getElementById('lb-img').src=src; document.getElementById('lightbox').style.display='flex'; }
+        function renderAudio(m) {
+            const uid = m.message_id;
+            setTimeout(()=>{
+                getLocal(uid, (data)=>{
+                    if(data) setupAudio(uid, data);
+                    else if(m.content === 'MEDIA_WAITING') downloadMedia(uid, 'audio', `aud-wrap-${uid}`);
+                });
+            }, 10);
+
+            if(m.content === 'MEDIA_WAITING') {
+                return `<div id="aud-wrap-${uid}" class="audio-box"><div class="control-btn"><div class="spinner-mini"></div></div><div style="font-size:12px; color:#8696a0;">Loading Audio...</div></div>`;
+            }
+            return `<div class="audio-box"><audio src="${m.content}" controls></audio></div>`;
+        }
+
+        async function downloadMedia(uid, type, containerID) {
+            try {
+                const res = await fetch(`/api/media?msg_id=${uid}`);
+                const d = await res.json();
+                if(d.content) {
+                    saveLocal(uid, d.content); // Save for next time
+                    const el = document.getElementById(containerID);
+                    if(el) {
+                        if(type==='image') el.innerHTML = `<img src="${d.content}" class="chat-img" onclick="viewImage(this.src)">`;
+                        else el.innerHTML = `<audio src="${d.content}" controls autoplay></audio>`;
+                    }
+                }
+            } catch(e) {
+                const el = document.getElementById(containerID);
+                if(el) el.innerHTML = `<div style="color:#f15c6d; font-size:12px; padding:10px;">Failed to load</div>`;
+            }
+        }
+
+        function setupAudio(uid, src) {
+            const el = document.getElementById(`aud-wrap-${uid}`);
+            if(el) el.innerHTML = `<audio src="${src}" controls></audio>`;
+        }
+
+        function viewImage(src){ 
+            const lb = document.getElementById('lightbox');
+            document.getElementById('lb-img').src=src; 
+            lb.style.display='flex';
+            setTimeout(()=>lb.classList.add('active'),10);
+        }
+        
+        function closeChat(){ document.getElementById('chat-window').style.transform='translateX(100%)'; }
+
     </script>
 </body>
 </html>
