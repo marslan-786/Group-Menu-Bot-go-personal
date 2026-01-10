@@ -3,129 +3,284 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bot Archive Viewer</title>
+    <title>WhatsApp Web Clone</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 0; display: flex; height: 100vh; background: #d1d7db; }
+        /* CSS RESET & VARS */
+        :root {
+            --bg-color: #d1d7db;
+            --sidebar-bg: #fff;
+            --header-bg: #f0f2f5;
+            --chat-bg: #efeae2;
+            --sent-msg: #d9fdd3;
+            --received-msg: #fff;
+            --primary: #008069;
+            --text-main: #111b21;
+            --text-sec: #667781;
+        }
+        body { margin: 0; font-family: 'Segoe UI', sans-serif; background: var(--bg-color); height: 100vh; overflow: hidden; }
+
+        /* --- HOME SCREEN (SESSION SELECTOR) --- */
+        #session-view {
+            display: flex; justify-content: center; align-items: center; height: 100vh; flex-direction: column;
+        }
+        .session-card {
+            background: white; width: 400px; padding: 20px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .session-list { margin-top: 20px; text-align: left; max-height: 300px; overflow-y: auto; }
+        .session-item {
+            padding: 15px; border-bottom: 1px solid #eee; cursor: pointer; display: flex; align-items: center; gap: 10px;
+        }
+        .session-item:hover { background: #f5f5f5; }
+        .avatar-ph { width: 40px; height: 40px; background: #ddd; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+
+        /* --- WHATSAPP INTERFACE --- */
+        #wa-interface { display: none; width: 100%; height: 100%; display: flex; } /* Flex will be toggled via JS */
         
         /* Sidebar */
-        .sidebar { width: 30%; background: #fff; border-right: 1px solid #ddd; display: flex; flex-direction: column; }
-        .header { background: #00a884; color: white; padding: 15px; font-weight: bold; }
-        .list-container { flex: 1; overflow-y: auto; }
-        .list-item { padding: 15px; border-bottom: 1px solid #f0f0f0; cursor: pointer; display: flex; justify-content: space-between; }
-        .list-item:hover { background: #f5f5f5; }
-        .list-item.active { background: #e9edef; }
+        .sidebar { width: 30%; min-width: 300px; background: var(--sidebar-bg); border-right: 1px solid #d1d7db; display: flex; flex-direction: column; }
+        .sb-header { height: 60px; background: var(--header-bg); padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #ddd; }
+        
+        /* Tabs */
+        .tabs { display: flex; background: var(--sidebar-bg); border-bottom: 1px solid #eee; }
+        .tab { flex: 1; padding: 15px; text-align: center; cursor: pointer; color: var(--text-sec); font-weight: 500; border-bottom: 3px solid transparent; }
+        .tab.active { color: var(--primary); border-bottom: 3px solid var(--primary); }
+        .tab:hover { background: #f5f5f5; }
 
-        /* Chat Area */
-        .chat-area { flex: 1; display: flex; flex-direction: column; background: #efeae2; }
-        .chat-header { background: #f0f2f5; padding: 10px 20px; border-bottom: 1px solid #ddd; font-weight: bold; }
-        .messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        /* Chat List */
+        .chat-list { flex: 1; overflow-y: auto; }
+        .chat-row { display: flex; padding: 12px 15px; cursor: pointer; align-items: center; border-bottom: 1px solid #f0f0f0; }
+        .chat-row:hover { background: #f5f5f5; }
+        .chat-row.active { background: #e9edef; }
+        .chat-info { margin-left: 15px; flex: 1; }
+        .chat-title { font-size: 16px; color: var(--text-main); font-weight: 500; }
+        .chat-sub { font-size: 13px; color: var(--text-sec); margin-top: 3px; }
+
+        /* Main Chat Area */
+        .chat-window { flex: 1; display: flex; flex-direction: column; background: var(--chat-bg); position: relative; }
+        .chat-window::before {
+            content: ""; position: absolute; top:0; left:0; width:100%; height:100%;
+            background-image: url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png');
+            opacity: 0.4; pointer-events: none;
+        }
+        .cw-header { height: 60px; background: var(--header-bg); padding: 0 16px; display: flex; align-items: center; z-index: 2; border-bottom: 1px solid #ddd; }
+        .cw-title { font-weight: bold; font-size: 16px; margin-left: 15px; }
+        
+        .messages-container { flex: 1; overflow-y: auto; padding: 20px 50px; display: flex; flex-direction: column; gap: 5px; z-index: 1; }
         
         /* Message Bubbles */
-        .msg { max-width: 60%; padding: 10px; border-radius: 8px; font-size: 14px; position: relative; word-wrap: break-word; }
-        .msg.sent { align-self: flex-end; background: #d9fdd3; }
-        .msg.received { align-self: flex-start; background: #fff; }
-        .time { font-size: 10px; color: #666; text-align: right; margin-top: 5px; }
+        .msg { max-width: 60%; padding: 6px 7px 8px 9px; border-radius: 7.5px; font-size: 14.2px; position: relative; word-wrap: break-word; box-shadow: 0 1px 0.5px rgba(0,0,0,0.13); margin-bottom: 8px; }
+        .msg.sent { align-self: flex-end; background: var(--sent-msg); border-top-right-radius: 0; }
+        .msg.received { align-self: flex-start; background: var(--received-msg); border-top-left-radius: 0; }
+        
+        .sender-name { font-size: 12px; color: #e542a3; font-weight: bold; margin-bottom: 4px; }
+        .meta-time { font-size: 11px; color: rgba(0,0,0,0.45); float: right; margin-top: 5px; margin-left: 10px; }
 
-        /* Media */
-        video, img { max-width: 100%; border-radius: 5px; margin-top: 5px; }
+        /* Media Styles */
+        img.chat-media { max-width: 300px; border-radius: 6px; cursor: pointer; }
+        video.chat-media { max-width: 300px; border-radius: 6px; }
+        
+        /* Voice Note Style */
+        .voice-note { display: flex; align-items: center; gap: 10px; width: 250px; padding: 5px; }
+        .vn-icon { font-size: 24px; color: #666; }
+        audio { width: 100%; height: 30px; }
+
     </style>
 </head>
 <body>
 
-    <div class="sidebar">
-        <div class="header" id="sidebar-title">Select Session</div>
-        <div class="list-container" id="list-box">
+    <div id="session-view">
+        <div class="session-card">
+            <h2>🤖 Connected Bots</h2>
+            <p style="color:#666; font-size:14px;">Select a bot to open WhatsApp View</p>
+            <div class="session-list" id="session-list-box">
+                <div style="padding:20px; text-align:center;">Loading...</div>
             </div>
+        </div>
     </div>
 
-    <div class="chat-area">
-        <div class="chat-header" id="chat-header">Select a chat to view history</div>
-        <div class="messages" id="messages-box"></div>
+    <div id="wa-interface" style="display:none;">
+        
+        <div class="sidebar">
+            <div class="sb-header">
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <div class="avatar-ph" style="background:#00a884; color:white;">🤖</div>
+                    <span id="current-bot-id" style="font-weight:bold;">Bot</span>
+                </div>
+                <button onclick="location.reload()" style="border:none; background:none; cursor:pointer; font-size:16px;">❌ Exit</button>
+            </div>
+
+            <div class="tabs">
+                <div class="tab active" onclick="switchTab('chats')">Chats</div>
+                <div class="tab" onclick="switchTab('groups')">Groups</div>
+                <div class="tab" onclick="switchTab('channels')">Channels</div>
+            </div>
+
+            <div class="chat-list" id="chat-list-box">
+                </div>
+        </div>
+
+        <div class="chat-window">
+            <div class="cw-header">
+                <div class="avatar-ph">👤</div>
+                <div class="cw-title" id="chat-header-name">Select a chat</div>
+            </div>
+            <div class="messages-container" id="messages-box">
+                </div>
+        </div>
     </div>
 
     <script>
         let currentBot = null;
-        let currentChat = null;
+        let allChatsCache = []; // Store raw chat data
+        let currentTab = 'chats'; // chats, groups, channels
 
-        // 1. Load Sessions on Start
+        // 🟢 STEP 1: LOAD SESSIONS
         fetch('/api/sessions')
             .then(res => res.json())
             .then(sessions => {
-                const list = document.getElementById('list-box');
-                document.getElementById('sidebar-title').innerText = "Active Sessions (" + sessions.length + ")";
+                const list = document.getElementById('session-list-box');
+                list.innerHTML = '';
+                if(sessions.length === 0) list.innerHTML = '<div style="padding:15px; text-align:center;">No active bots</div>';
                 
                 sessions.forEach(num => {
                     let div = document.createElement('div');
-                    div.className = 'list-item';
-                    div.innerText = "🤖 " + num;
-                    div.onclick = () => loadChats(num);
+                    div.className = 'session-item';
+                    div.innerHTML = `<div class="avatar-ph">🤖</div> <b>${num}</b>`;
+                    div.onclick = () => openInterface(num);
                     list.appendChild(div);
                 });
             });
 
-        // 2. Load Chats for a Bot
-        function loadChats(botID) {
+        // 🟢 STEP 2: OPEN INTERFACE
+        function openInterface(botID) {
             currentBot = botID;
-            document.getElementById('sidebar-title').innerText = "Chats for " + botID;
-            const list = document.getElementById('list-box');
-            list.innerHTML = '<div style="padding:10px;">Loading chats...</div>';
+            document.getElementById('session-view').style.display = 'none';
+            document.getElementById('wa-interface').style.display = 'flex';
+            document.getElementById('current-bot-id').innerText = botID;
+            loadChats(botID);
+        }
+
+        // 🟢 STEP 3: LOAD CHATS
+        function loadChats(botID) {
+            const list = document.getElementById('chat-list-box');
+            list.innerHTML = '<div style="text-align:center; padding:20px;">Syncing...</div>';
 
             fetch(`/api/chats?bot_id=${botID}`)
                 .then(res => res.json())
-                .then(chats => {
-                    list.innerHTML = '';
-                    // Back Button
-                    let back = document.createElement('div');
-                    back.className = 'list-item';
-                    back.style.background = '#ddd';
-                    back.innerText = "⬅ Back to Sessions";
-                    back.onclick = () => location.reload();
-                    list.appendChild(back);
-
-                    chats.forEach(chatID => {
-                        let div = document.createElement('div');
-                        div.className = 'list-item';
-                        div.innerText = chatID.split('@')[0]; // Clean ID
-                        div.onclick = () => loadMessages(botID, chatID);
-                        list.appendChild(div);
+                .then(chatIDs => {
+                    // NOTE: Since the API currently only returns IDs, we categorize them by ID string
+                    // Ideally, the API should return objects {id, isGroup, isChannel, name}
+                    // We will do client-side categorization for now based on ID suffix
+                    allChatsCache = chatIDs.map(id => {
+                        return {
+                            id: id,
+                            isGroup: id.includes('@g.us'),
+                            isChannel: id.includes('@newsletter'),
+                            name: id.split('@')[0] // Temporary Name
+                        };
                     });
+                    renderChatList();
                 });
         }
 
-        // 3. Load Messages
-        function loadMessages(botID, chatID) {
-            currentChat = chatID;
-            document.getElementById('chat-header').innerText = chatID;
-            const msgBox = document.getElementById('messages-box');
-            msgBox.innerHTML = 'Loading...';
+        // 🟢 STEP 4: FILTER TABS
+        function switchTab(tab) {
+            currentTab = tab;
+            // Update UI classes
+            document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+            event.target.classList.add('active');
+            renderChatList();
+        }
 
-            fetch(`/api/messages?bot_id=${botID}&chat_id=${chatID}`)
+        function renderChatList() {
+            const list = document.getElementById('chat-list-box');
+            list.innerHTML = '';
+
+            let filtered = allChatsCache.filter(c => {
+                if(currentTab === 'groups') return c.isGroup;
+                if(currentTab === 'channels') return c.isChannel;
+                return !c.isGroup && !c.isChannel; // Private chats
+            });
+
+            if(filtered.length === 0) {
+                list.innerHTML = '<div style="text-align:center; color:#888; margin-top:20px;">No chats here</div>';
+                return;
+            }
+
+            filtered.forEach(c => {
+                let div = document.createElement('div');
+                div.className = 'chat-row';
+                div.innerHTML = `
+                    <div class="avatar-ph" style="background:#dfe3e5; color:white;">👤</div>
+                    <div class="chat-info">
+                        <div class="chat-title">${c.name}</div>
+                        <div class="chat-sub">${c.id}</div>
+                    </div>
+                `;
+                div.onclick = () => {
+                    document.querySelectorAll('.chat-row').forEach(e => e.classList.remove('active'));
+                    div.classList.add('active');
+                    loadMessages(c.id, c.name);
+                };
+                list.appendChild(div);
+            });
+        }
+
+        // 🟢 STEP 5: LOAD MESSAGES
+        function loadMessages(chatID, chatName) {
+            document.getElementById('chat-header-name').innerText = chatName;
+            const msgBox = document.getElementById('messages-box');
+            msgBox.innerHTML = '<div style="text-align:center; padding:20px;">Loading messages...</div>';
+
+            fetch(`/api/messages?bot_id=${currentBot}&chat_id=${chatID}`)
                 .then(res => res.json())
                 .then(msgs => {
                     msgBox.innerHTML = '';
                     if(!msgs) return;
 
+                    // Update name if found in messages (as we saved names in Mongo)
+                    if(msgs.length > 0 && msgs[0].sender_name && msgs[0].sender_name !== chatID) {
+                        document.getElementById('chat-header-name').innerText = msgs[0].sender_name;
+                        // Update cache for sidebar too
+                        let cached = allChatsCache.find(c => c.id === chatID);
+                        if(cached) cached.name = msgs[0].sender_name;
+                    }
+
                     msgs.forEach(m => {
                         let div = document.createElement('div');
                         div.className = 'msg ' + (m.is_from_me ? 'sent' : 'received');
 
-                        let content = '';
+                        let senderHtml = (!m.is_from_me && m.is_group) 
+                            ? `<div class="sender-name">${m.sender_name || 'Unknown'}</div>` : '';
+
+                        let contentHtml = '';
                         if(m.type === 'text') {
-                            content = m.content;
-                        } else if (m.type === 'video') {
-                            // Video Player for Catbox Link
-                            content = `<video src="${m.content}" controls></video>`;
-                        } else if (m.type === 'file') {
-                            content = `<a href="${m.content}" target="_blank">📄 Download File</a>`;
-                        } else if (m.type === 'image') {
-                            content = `📷 ${m.content}`;
+                            contentHtml = m.content;
+                        } 
+                        else if (m.type === 'image') {
+                            contentHtml = `<img src="${m.content}" class="chat-media" onclick="window.open(this.src)">`;
+                        }
+                        else if (m.type === 'video') {
+                            contentHtml = `<video src="${m.content}" class="chat-media" controls></video>`;
+                        }
+                        else if (m.type === 'audio') {
+                            // Voice Note Look
+                            contentHtml = `
+                                <div class="voice-note">
+                                    <div class="vn-icon">🎤</div>
+                                    <audio src="${m.content}" controls></audio>
+                                </div>`;
+                        }
+                        else if (m.type === 'file') {
+                            contentHtml = `<a href="${m.content}" target="_blank" style="text-decoration:none; color:#333;">📄 Attachment</a>`;
                         }
 
-                        let date = new Date(m.timestamp).toLocaleString();
-                        div.innerHTML = `<div>${content}</div><div class="time">${date}</div>`;
+                        let time = new Date(m.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+                        div.innerHTML = `${senderHtml} ${contentHtml} <span class="meta-time">${time}</span>`;
                         msgBox.appendChild(div);
                     });
-                    msgBox.scrollTop = msgBox.scrollHeight; // Auto scroll to bottom
+                    msgBox.scrollTop = msgBox.scrollHeight;
                 });
         }
     </script>
