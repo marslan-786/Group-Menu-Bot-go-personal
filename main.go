@@ -30,6 +30,19 @@ import (
     "io"   
 )
 
+// 📦 STRUCT FOR MESSAGE HISTORY (MISSING THA)
+type ChatMessage struct {
+	BotID      string    `bson:"bot_id" json:"bot_id"`
+	ChatID     string    `bson:"chat_id" json:"chat_id"`
+	Sender     string    `bson:"sender" json:"sender"`
+	SenderName string    `bson:"sender_name" json:"sender_name"`
+	MessageID  string    `bson:"message_id" json:"message_id"`
+	Timestamp  time.Time `bson:"timestamp" json:"timestamp"`
+	Type       string    `bson:"type" json:"type"` // text, image, video, audio
+	Content    string    `bson:"content" json:"content"` // Text or URL
+	IsFromMe   bool      `bson:"is_from_me" json:"is_from_me"`
+}
+
 var (
 	client           *whatsmeow.Client
 	container        *sqlstore.Container
@@ -51,11 +64,11 @@ var (
 	globalClient    *whatsmeow.Client
 	ytCache         = make(map[string]YTSession)
 	ytDownloadCache = make(map[string]YTState)
-    cachedMenuImage *waProto.ImageMessage
-    mongoClient *mongo.Client
-    msgCollection *mongo.Collection
+	cachedMenuImage *waProto.ImageMessage
 
-
+	// ✅ MongoDB Globals (UPDATED NAME)
+	mongoClient           *mongo.Client
+	chatHistoryCollection *mongo.Collection
 )
 
 // ✅ 1. ریڈیس کنکشن
@@ -98,98 +111,88 @@ func loadGlobalSettings() {
 func main() {
 	fmt.Println("🚀 IMPOSSIBLE BOT | STARTING (POSTGRES ONLY)")
 
-	// 1. سروسز اسٹارٹ کریں
+	// 1. Services Start
 	initRedis()
 	loadPersistentUptime()
-	loadGlobalSettings() 
+	loadGlobalSettings()
 	startPersistentUptimeTracker()
-    SetupFeatures()
+	SetupFeatures()
 
-    // 🔥🔥🔥 [NEW] MONGODB CONNECTION START 🔥🔥🔥
-    mongoURL := os.Getenv("MONGO_URL")
-    if mongoURL != "" {
-        // 10 سیکنڈ کا ٹائم آؤٹ تاکہ کنکشن اٹک نہ جائے
-        mCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-        defer cancel()
-        
-        // Connect Logic
-        mClient, err := mongo.Connect(mCtx, options.Client().ApplyURI(mongoURL))
-        if err != nil {
-            fmt.Println("❌ MongoDB Connection Error:", err)
-        } else {
-            // Ping check
-            if err := mClient.Ping(mCtx, nil); err != nil {
-                fmt.Println("❌ MongoDB Ping Failed:", err)
-            } else {
-                mongoClient = mClient
-                // Database: whatsapp_bot, Collection: messages
-                msgCollection = mClient.Database("whatsapp_bot").Collection("messages")
-                fmt.Println("🍃 [MONGODB] Connected for Chat History!")
-            }
-        }
-    } else {
-        fmt.Println("⚠️ MONGO_URL not found! Chat history will not be saved.")
-    }
-    // 🔥🔥🔥 [NEW] MONGODB CONNECTION END 🔥🔥🔥
+	// 🔥🔥🔥 [NEW] MONGODB CONNECTION START 🔥🔥🔥
+	mongoURL := os.Getenv("MONGO_URL")
+	if mongoURL != "" {
+		mCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 
+		mClient, err := mongo.Connect(mCtx, options.Client().ApplyURI(mongoURL))
+		if err != nil {
+			fmt.Println("❌ MongoDB Connection Error:", err)
+		} else {
+			if err := mClient.Ping(mCtx, nil); err != nil {
+				fmt.Println("❌ MongoDB Ping Failed:", err)
+			} else {
+				mongoClient = mClient
+				// ✅ FIX: Variable name updated to chatHistoryCollection
+				chatHistoryCollection = mClient.Database("whatsapp_bot").Collection("messages")
+				fmt.Println("🍃 [MONGODB] Connected for Chat History!")
+			}
+		}
+	} else {
+		fmt.Println("⚠️ MONGO_URL not found! Chat history will not be saved.")
+	}
+	// 🔥🔥🔥 [NEW] MONGODB CONNECTION END 🔥🔥🔥
 
-	// 2. ڈیٹا بیس کنکشن (Postgres)
+	// 2. Postgres Connection
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
-		log.Fatal("❌ FATAL ERROR: DATABASE_URL environment variable is missing! This bot requires PostgreSQL.")
+		log.Fatal("❌ FATAL ERROR: DATABASE_URL environment variable is missing!")
 	}
-
 	fmt.Println("🐘 [DATABASE] Connecting to PostgreSQL...")
-
 	rawDB, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatalf("❌ Failed to open Postgres connection: %v", err)
 	}
-
 	rawDB.SetMaxOpenConns(20)
 	rawDB.SetMaxIdleConns(5)
 	rawDB.SetConnMaxLifetime(30 * time.Minute)
-	fmt.Println("✅ [TUNING] Postgres Pool Configured (Max: 20 Connections)")
+	fmt.Println("✅ [TUNING] Postgres Pool Configured")
 
-	// 3. WhatsMeow کنٹینر
+	// 3. WhatsMeow Container
 	dbLog := waLog.Stdout("Database", "ERROR", true)
 	container = sqlstore.NewWithDB(rawDB, "postgres", dbLog)
-
 	err = container.Upgrade(context.Background())
 	if err != nil {
 		log.Fatalf("❌ Failed to initialize database tables: %v", err)
 	}
 	fmt.Println("✅ [DATABASE] Tables verified/created successfully!")
-
 	dbContainer = container
 
-	// 4. ملٹی بوٹ سسٹم شروع کریں
+	// 4. Multi-Bot System
 	fmt.Println("🤖 Initializing Multi-Bot System from Database...")
 	StartAllBots(container)
 
-	// 5. باقی سسٹمز
+	// 5. Systems
 	InitLIDSystem()
 
-	// 6. ویب سرور روٹس (UPDATED)
+	// 6. Web Server Routes
 	http.HandleFunc("/", serveHTML)
 	http.HandleFunc("/pic.png", servePicture)
 	http.HandleFunc("/ws", handleWebSocket)
-	
-    // Pair APIs
-    http.HandleFunc("/api/pair", handlePairAPI)
+
+	// Pair APIs
+	http.HandleFunc("/api/pair", handlePairAPI)
 	http.HandleFunc("/link/pair/", handlePairAPILegacy)
-	
-    // Delete APIs
-    http.HandleFunc("/link/delete", handleDeleteSession)
+
+	// Delete APIs
+	http.HandleFunc("/link/delete", handleDeleteSession)
 	http.HandleFunc("/del/all", handleDelAllAPI)
 	http.HandleFunc("/del/", handleDelNumberAPI)
 
-    // 🔥🔥🔥 [NEW] WEB VIEW & CHAT HISTORY APIS 🔥🔥🔥
-    http.HandleFunc("/lists", serveListsHTML)       // HTML Page
-    http.HandleFunc("/api/sessions", handleGetSessions) // Active Bots
-    http.HandleFunc("/api/chats", handleGetChats)       // Chat List
-    http.HandleFunc("/api/messages", handleGetMessages) // Messages
-    // 🔥🔥🔥 [NEW END] 🔥🔥🔥
+	// 🔥 WEB VIEW & CHAT HISTORY APIS 🔥
+	http.HandleFunc("/lists", serveListsHTML)
+	http.HandleFunc("/api/sessions", handleGetSessions)
+	http.HandleFunc("/api/chats", handleGetChats)       // Updated Function
+	http.HandleFunc("/api/messages", handleGetMessages) // Updated Function
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -203,13 +206,12 @@ func main() {
 		}
 	}()
 
-	// 7. شٹ ڈاؤن ہینڈلنگ
+	// 7. Shutdown Handling
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
 	fmt.Println("\n🛑 Shutting down system...")
-
 	clientsMutex.Lock()
 	for id, activeClient := range activeClients {
 		fmt.Printf("🔌 Disconnecting Bot: %s\n", id)
@@ -217,12 +219,10 @@ func main() {
 	}
 	clientsMutex.Unlock()
 
-    // Mongo Close
-    if mongoClient != nil {
-        mongoClient.Disconnect(context.Background())
-        fmt.Println("🍃 MongoDB Disconnected")
-    }
-
+	if mongoClient != nil {
+		mongoClient.Disconnect(context.Background())
+		fmt.Println("🍃 MongoDB Disconnected")
+	}
 	if rawDB != nil {
 		rawDB.Close()
 	}
@@ -792,97 +792,148 @@ func handleGetSessions(w http.ResponseWriter, r *http.Request) {
 
 // 3. Get Chats (Unique ChatIDs from Mongo for a Bot)
 func handleGetChats(w http.ResponseWriter, r *http.Request) {
-    botID := r.URL.Query().Get("bot_id")
-    if botID == "" { http.Error(w, "Bot ID required", 400); return }
+	if chatHistoryCollection == nil {
+		http.Error(w, "MongoDB not connected", 500)
+		return
+	}
+	botID := r.URL.Query().Get("bot_id")
+	if botID == "" {
+		http.Error(w, "Bot ID required", 400)
+		return
+	}
 
-    // Mongo se distinct chat_ids uthayen
-    filter := bson.M{"bot_id": botID}
-    chats, err := msgCollection.Distinct(context.Background(), "chat_id", filter)
-    if err != nil {
-        http.Error(w, err.Error(), 500)
-        return
-    }
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(chats)
+	filter := bson.M{"bot_id": botID}
+	// ✅ FIX: Using chatHistoryCollection
+	chats, err := chatHistoryCollection.Distinct(context.Background(), "chat_id", filter)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(chats)
 }
 
-// 4. Get Messages
 func handleGetMessages(w http.ResponseWriter, r *http.Request) {
-    botID := r.URL.Query().Get("bot_id")
-    chatID := r.URL.Query().Get("chat_id")
-    
-    filter := bson.M{"bot_id": botID, "chat_id": chatID}
-    opts := options.Find().SetSort(bson.D{{Key: "timestamp", Value: 1}}) // Oldest first
+	if chatHistoryCollection == nil {
+		http.Error(w, "MongoDB not connected", 500)
+		return
+	}
+	botID := r.URL.Query().Get("bot_id")
+	chatID := r.URL.Query().Get("chat_id")
 
-    cursor, err := msgCollection.Find(context.Background(), filter, opts)
-    if err != nil { http.Error(w, err.Error(), 500); return }
-    
-    var messages []ChatMessage
-    if err = cursor.All(context.Background(), &messages); err != nil {
-        http.Error(w, err.Error(), 500); return
-    }
-    
-    w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(messages)
+	filter := bson.M{"bot_id": botID, "chat_id": chatID}
+	opts := options.Find().SetSort(bson.D{{Key: "timestamp", Value: 1}})
+
+	// ✅ FIX: Using chatHistoryCollection
+	cursor, err := chatHistoryCollection.Find(context.Background(), filter, opts)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	var messages []ChatMessage
+	if err = cursor.All(context.Background(), &messages); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(messages)
 }
 
+// 🐱 CATBOX UPLOAD FUNCTION (یہ غائب تھا)
+func UploadToCatbox(data []byte, filename string) (string, error) {
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+
+	// File Part
+	part, _ := writer.CreateFormFile("fileToUpload", filename)
+	part.Write(data)
+
+	// Type Part
+	writer.WriteField("reqtype", "fileupload")
+	writer.Close()
+
+	req, _ := http.NewRequest("POST", "https://catbox.moe/user/api.php", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	return string(respBody), nil
+}
+
+// 🔥 HELPER: Save Message to Mongo (Fixed Download & Variable)
 func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, msg *waProto.Message, isFromMe bool, ts uint64) {
-    if msgCollection == nil { return }
+	// ✅ FIX: Using chatHistoryCollection
+	if chatHistoryCollection == nil {
+		return
+	}
 
-    var msgType, content string
-    timestamp := time.Unix(int64(ts), 0)
+	var msgType, content string
+	timestamp := time.Unix(int64(ts), 0)
 
-    // 1. TEXT HANDLING
-    if txt := getText(msg); txt != "" {
-        msgType = "text"
-        content = txt
-    } else if msg.ImageMessage != nil {
-        // 2. IMAGE Handling (Base64 or Link if needed, but saving caption for now)
-        // For heavy storage, avoid saving image binary to Mongo.
-        msgType = "image"
-        content = "[Image] " + msg.ImageMessage.GetCaption()
-    } else if msg.VideoMessage != nil {
-        // 3. VIDEO Handling (Upload to Catbox)
-        msgType = "video"
-        data, err := client.Download(msg.VideoMessage)
-        if err == nil {
-            url, err := UploadToCatbox(data, "video.mp4")
-            if err == nil {
-                content = url // Catbox Link
-            } else {
-                content = "Error uploading video"
-            }
-        }
-    } else if msg.DocumentMessage != nil {
-        // 4. DOCUMENT Handling
-        msgType = "file"
-        data, err := client.Download(msg.DocumentMessage)
-        if err == nil {
-            fname := msg.DocumentMessage.GetFileName()
-            if fname == "" { fname = "file.bin" }
-            url, err := UploadToCatbox(data, fname)
-            if err == nil {
-                content = url
-            }
-        }
-    } else {
-        return // Unknown type
-    }
+	// 1. TEXT HANDLING
+	if txt := getText(msg); txt != "" {
+		msgType = "text"
+		content = txt
+	} else if msg.ImageMessage != nil {
+		msgType = "image"
+		content = "[Image] " + msg.ImageMessage.GetCaption()
+	} else if msg.VideoMessage != nil {
+		// 3. VIDEO Handling
+		msgType = "video"
+		// ✅ FIX: Added context.Background() to Download
+		data, err := client.Download(context.Background(), msg.VideoMessage)
+		if err == nil {
+			url, err := UploadToCatbox(data, "video.mp4")
+			if err == nil {
+				content = url
+			} else {
+				content = "Error uploading video"
+			}
+		}
+	} else if msg.DocumentMessage != nil {
+		// 4. DOCUMENT Handling
+		msgType = "file"
+		// ✅ FIX: Added context.Background() to Download
+		data, err := client.Download(context.Background(), msg.DocumentMessage)
+		if err == nil {
+			fname := msg.DocumentMessage.GetFileName()
+			if fname == "" {
+				fname = "file.bin"
+			}
+			url, err := UploadToCatbox(data, fname)
+			if err == nil {
+				content = url
+			}
+		}
+	} else {
+		return // Unknown type
+	}
 
-    if content == "" { return }
+	if content == "" {
+		return
+	}
 
-    doc := ChatMessage{
-        BotID:     botID,
-        ChatID:    chatID,
-        Sender:    chatID, // Simplified
-        Type:      msgType,
-        Content:   content,
-        IsFromMe:  isFromMe,
-        Timestamp: timestamp,
-    }
+	doc := ChatMessage{
+		BotID:     botID,
+		ChatID:    chatID,
+		Sender:    chatID,
+		Type:      msgType,
+		Content:   content,
+		IsFromMe:  isFromMe,
+		Timestamp: timestamp,
+	}
 
-    _, err := msgCollection.InsertOne(context.Background(), doc)
-    if err != nil {
-        fmt.Printf("❌ Mongo Save Error: %v\n", err)
-    }
+	// ✅ FIX: Using chatHistoryCollection
+	_, err := chatHistoryCollection.InsertOne(context.Background(), doc)
+	if err != nil {
+		fmt.Printf("❌ Mongo Save Error: %v\n", err)
+	}
 }

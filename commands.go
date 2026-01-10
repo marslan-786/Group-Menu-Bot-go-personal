@@ -66,7 +66,6 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 		}
 
 		// 🍃 [NEW] Save Live Message to Mongo (Background)
-		// یہ کوڈ نئے آنے والے میسجز کو ڈیٹا بیس میں ڈالے گا
 		go func() {
 			botID := getCleanID(botClient.Store.ID.User)
 			saveMessageToMongo(botClient, botID, v.Info.Chat.String(), v.Message, v.Info.IsFromMe, uint64(v.Info.Timestamp.Unix()))
@@ -75,10 +74,9 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 		// ✅ میسج کو بیک گراؤنڈ میں پروسیس کریں (کمانڈز کے لیے)
 		go processMessage(botClient, v)
 
-	// 🔥🔥🔥 [NEW FIX] ہسٹری سنک کو بیک گراؤنڈ میں ہینڈل کریں 🔥🔥🔥
+	// 🔥🔥🔥 [FIXED] ہسٹری سنک کو بیک گراؤنڈ میں ہینڈل کریں 🔥🔥🔥
 	case *events.HistorySync:
 		go func() {
-			// یہ بہت ہیوی ڈیٹا ہوتا ہے، اسے یہاں خاموشی سے پروسیس ہونے دیں
 			if v.Data == nil || len(v.Data.Conversations) == 0 {
 				return
 			}
@@ -89,12 +87,24 @@ func handler(botClient *whatsmeow.Client, evt interface{}) {
 			// ہسٹری کے میسجز کو لوپ کر کے مونگو میں ڈالیں
 			for _, conv := range v.Data.Conversations {
 				for _, histMsg := range conv.Messages {
-					msg := histMsg.Message
-					if msg == nil {
+					webMsg := histMsg.Message
+					if webMsg == nil || webMsg.Message == nil {
 						continue
 					}
-					// MongoDB Save Call
-					saveMessageToMongo(botClient, botID, conv.Id, msg, histMsg.Message.Key.FromMe, histMsg.Message.MessageTimestamp)
+
+					// ✅ FIX: Dereference pointers safely
+					isFromMe := false
+					if webMsg.Key != nil && webMsg.Key.FromMe != nil {
+						isFromMe = *webMsg.Key.FromMe
+					}
+
+					ts := uint64(0)
+					if webMsg.MessageTimestamp != nil {
+						ts = *webMsg.MessageTimestamp
+					}
+
+					// ✅ FIX: conv.ID (Capital ID) and Correct Msg Type
+					saveMessageToMongo(botClient, botID, conv.ID, webMsg.Message, isFromMe, ts)
 				}
 			}
 		}()
