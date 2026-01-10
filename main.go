@@ -17,12 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"image"
-	"image/jpeg"
-	_ "image/png"
 
 	"github.com/gorilla/websocket"
-	"golang.org/x/image/draw"
 	_ "github.com/lib/pq"            // Postgres
 	_ "github.com/go-sql-driver/mysql" // ✅ Added MySQL Driver
 	"github.com/redis/go-redis/v9"
@@ -154,7 +150,6 @@ func main() {
 
 	// 1. Init Services
 	initRedis()
-	initHistoryDB()
 	loadPersistentUptime()
 	loadGlobalSettings()
 	startPersistentUptimeTracker()
