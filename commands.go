@@ -1411,9 +1411,9 @@ func sendReplyMessage(client *whatsmeow.Client, v *events.Message, text string) 
 				
 				// یہ حصہ چینل کا نام اور آئی ڈی سیٹ کرتا ہے
 				ForwardedNewsletterMessageInfo: &waProto.ForwardedNewsletterMessageInfo{
-					NewsletterJid:   proto.String(newsletterID),
+					NewsletterJID:   proto.String(newsletterID),
 					NewsletterName:  proto.String(newsletterName),
-					ServerMessageId: proto.Int32(100), // کوئی بھی فرضی ID
+					ServerMessageID: proto.Int32(100), // کوئی بھی فرضی ID
 				},
 			},
 		},
