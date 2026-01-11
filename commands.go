@@ -1211,33 +1211,36 @@ func sendMenu(client *whatsmeow.Client, v *events.Message) {
 ║ ╰───────────────────────╯
 ╚══════════════════════╝`,
 		BOT_NAME, OWNER_NAME, currentMode, uptimeStr,
-		// 🎬 Movie (11) -> ted شامل کر دیا
 		p, p, p, p, p, p, p, p, p, p, p,
-		// 🎵 Music (8)
 		p, p, p, p, p, p, p, p,
-		// 📱 Social (10) -> 9gag, ifunny شامل
 		p, p, p, p, p, p, p, p, p, p,
-		// 🌐 Web (9) -> giphy, flickr شامل
 		p, p, p, p, p, p, p, p, p,
-		// 🧠 AI & Utils (14) -> id, data شامل
 		p, p, p, p, p, p, p, p, p, p, p, p, p, p,
-		// 🎨 Media Tools (7)
 		p, p, p, p, p, p, p,
-		// 👥 Group Admin (9)
 		p, p, p, p, p, p, p, p, p,
-		// 🛡️ Group Security (5)
 		p, p, p, p, p,
-		// ⚙️ Owner Control (14)
 		p, p, p, p, p, p, p, p, p, p, p, p)
+
+	// رپلائی کی معلومات تیار کرنا (جو میسج آیا ہے اس کی آئی ڈی وغیرہ)
+	replyContext := &waProto.ContextInfo{
+		StanzaID:      proto.String(v.Info.ID),
+		Participant:   proto.String(v.Info.Sender.String()),
+		QuotedMessage: v.Message,
+	}
 
 	// 🚀 CACHING LOGIC
 	if cachedMenuImage != nil {
 		fmt.Println("🚀 Using Cached Menu Image (Super Fast)")
-		msg := &waProto.Message{
-			ImageMessage: cachedMenuImage, // پرانا والا آبجیکٹ
-		}
-		msg.ImageMessage.Caption = proto.String(menu)
-		client.SendMessage(context.Background(), v.Info.Chat, msg)
+		
+		// ⚠️ اہم: ہم کیشڈ امیج کی کاپی بنا رہے ہیں تاکہ اصل کیش خراب نہ ہو
+		// اور ہم اس مخصوص یوزر کو رپلائی کر سکیں۔
+		imgMsg := *cachedMenuImage // Dereference to copy value
+		imgMsg.Caption = proto.String(menu)
+		imgMsg.ContextInfo = replyContext // رپلائی سیٹ کر دیا
+
+		client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+			ImageMessage: &imgMsg,
+		})
 		return
 	}
 
@@ -1247,6 +1250,7 @@ func sendMenu(client *whatsmeow.Client, v *events.Message) {
 	if err == nil {
 		uploadResp, err := client.Upload(context.Background(), imgData, whatsmeow.MediaImage)
 		if err == nil {
+			// کیش کو صرف فائل کی معلومات کے ساتھ محفوظ کریں
 			cachedMenuImage = &waProto.ImageMessage{
 				URL:           proto.String(uploadResp.URL),
 				DirectPath:    proto.String(uploadResp.DirectPath),
@@ -1255,18 +1259,25 @@ func sendMenu(client *whatsmeow.Client, v *events.Message) {
 				FileEncSHA256: uploadResp.FileEncSHA256,
 				FileSHA256:    uploadResp.FileSHA256,
 				FileLength:    proto.Uint64(uint64(len(imgData))),
-				Caption:       proto.String(menu),
+				// Caption یہاں سیٹ نہیں کریں گے تاکہ ہر بار نیا لگ سکے
 			}
 			
+			// بھیجنے کے لیے کاپی بنائیں اور رپلائی شامل کریں
+			imgMsg := *cachedMenuImage
+			imgMsg.Caption = proto.String(menu)
+			imgMsg.ContextInfo = replyContext
+
 			client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
-				ImageMessage: cachedMenuImage,
+				ImageMessage: &imgMsg,
 			})
 			return
 		}
 	}
 
+	// اگر تصویر فیل ہو جائے تو سادہ ٹیکسٹ رپلائی
 	sendReplyMessage(client, v, menu)
 }
+
 
 func recovery() {
 	if r := recover(); r != nil {
@@ -1381,6 +1392,10 @@ func react(client *whatsmeow.Client, chat types.JID, msgID types.MessageID, emoj
 
 
 func replyMessage(client *whatsmeow.Client, v *events.Message, text string) {
+	// چینل کی تفصیلات
+	newsletterID := "120363424476167116@newsletter"
+	newsletterName := "Nothing is Impossible"
+
 	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		ExtendedTextMessage: &waProto.ExtendedTextMessage{
 			Text: proto.String(text),
@@ -1388,10 +1403,21 @@ func replyMessage(client *whatsmeow.Client, v *events.Message, text string) {
 				StanzaID:      proto.String(v.Info.ID),
 				Participant:   proto.String(v.Info.Sender.String()),
 				QuotedMessage: v.Message,
+
+				// فارورڈ ٹیگ لگانے کے لیے
+				IsForwarded: proto.Bool(true),
+
+				// چینل کا ریفرنس دینے کے لیے
+				ForwardedNewsletterMessageInfo: &waProto.ForwardedNewsletterMessageInfo{
+					NewsletterJID:   proto.String(newsletterID),
+					NewsletterName:  proto.String(newsletterName),
+					ServerMessageID: proto.Int32(100), // کوئی بھی فرضی آئی ڈی
+				},
 			},
 		},
 	})
 }
+
 
 func sendReplyMessage(client *whatsmeow.Client, v *events.Message, text string) {
 	// چینل کی سیٹنگز
