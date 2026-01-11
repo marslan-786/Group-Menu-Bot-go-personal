@@ -549,11 +549,6 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			react(client, v.Info.Chat, v.Info.ID, "👁️")
 			toggleAutoRead(client, v)
 			
-		case "check":
-		// سارا کچرا نکال دیا، صرف فنکشن کال رہ گئی
-		    handleCheckLID(client, v, args)
-		
-		
 		case "autoreact":
 			react(client, v.Info.Chat, v.Info.ID, "❤️")
 			toggleAutoReact(client, v)
@@ -1211,6 +1206,7 @@ func sendMenu(client *whatsmeow.Client, v *events.Message) {
 ║ │ 🔸 *%sdelstatus* - Del Target
 ║ │ 🔸 *%sliststatus* - List Target
 ║ │ 🔸 *%sreadallstatus* - Read All
+║ │ 🔸 *%santidelete* - set/on/off
 ║ │ 🔸 *%slistbots* - Active Bots
 ║ ╰───────────────────────╯
 ╚══════════════════════╝`,
@@ -1232,7 +1228,7 @@ func sendMenu(client *whatsmeow.Client, v *events.Message) {
 		// 🛡️ Group Security (5)
 		p, p, p, p, p,
 		// ⚙️ Owner Control (14)
-		p, p, p, p, p, p, p, p, p, p, p)
+		p, p, p, p, p, p, p, p, p, p, p, p)
 
 	// 🚀 CACHING LOGIC
 	if cachedMenuImage != nil {
