@@ -247,17 +247,15 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	isCommand := strings.HasPrefix(bodyClean, prefix)
 
 	// 🔥 GLOBAL SETTINGS PRE-FETCH (RAM ACCESS)
-	// یہ ہم نے باہر نکال لیا تاکہ Goroutine کے اندر بار بار Mutex Lock نہ لگانا پڑے
 	dataMutex.RLock()
 	doRead := data.AutoRead
 	doReact := data.AutoReact
 	dataMutex.RUnlock()
 
 	// =========================================================================
-	// 🚀 GOROUTINE START (سب کچھ اب بیک گراؤنڈ میں چلے گا)
+	// 🚀 GOROUTINE START (Background Tasks)
 	// =========================================================================
 	go func() {
-		// 🛡️ Inner Panic Recovery for Thread Safety
 		defer func() {
 			if r := recover(); r != nil {
 				fmt.Printf("⚠️ Thread Panic: %v\n", r)
@@ -281,24 +279,19 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			return
 		}
 
-		// 🔘 B. AUTO READ & REACT (SMART OPTIMIZED MODE 🚀)
-		// ⚡ OPTIMIZATION: اگر بٹن OFF ہے تو کوڈ کا یہ حصہ چلے گا ہی نہیں۔
+		// 🔘 B. AUTO READ & REACT
 		if doRead || doReact {
 			go func() {
 				defer func() { recover() }()
 
-				// ⚡ FIX: اگر AutoRead آن بھی ہے، تب بھی گروپ کے فضول میسجز کو اگنور کریں
-				// صرف پرائیویٹ چیٹ یا کمانڈز کو Read مارک کریں۔ ساکٹ بچائیں۔
 				if doRead {
 					if !v.Info.IsGroup || isCommand {
 						client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
 					}
 				}
 				
-				// Auto React Logic
 				if doReact {
-					shouldReact := !v.Info.IsGroup // پرائیویٹ میں ہمیشہ
-					// گروپ میں صرف تب جب مینشن ہو یا کمانڈ ہو (ہر میسج پر نہیں)
+					shouldReact := !v.Info.IsGroup
 					if v.Info.IsGroup && (strings.Contains(bodyClean, "@"+botID) || isCommand) {
 						shouldReact = true
 					}
@@ -322,48 +315,64 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			}()
 		}
 
-		// 🔍 C. Session Checks (Reply Handling)
+		// 🔍 C. SESSION CHECKS (Reply Handling - The Critical Part)
+		// ہم سب سے پہلے چیک کریں گے کہ یہ کس میسج کا ریپلائی ہے
 		extMsg := v.Message.GetExtendedTextMessage()
+		
+		// 1. YouTube Search Reply (Priority Fix 🚀)
+		// اگر میسج کسی بوٹ کے میسج کا ریپلائی ہے، تب ہی یہ چیک چلے گا
 		if extMsg != nil && extMsg.ContextInfo != nil && extMsg.ContextInfo.StanzaID != nil {
 			qID := extMsg.ContextInfo.GetStanzaID()
 
-			// 1. Setup Wizard
+			// a. Setup Wizard
 			if _, ok := setupMap[qID]; ok {
 				handleSetupResponse(client, v)
 				return
 			}
 			
-			// 🔥 2. YouTube Format Selection (PRIORITY FIX 🚀)
-			// یوٹیوب کو اوپر لے آئے ہیں تاکہ اگر یہ یوٹیوب کا مینو ہے تو مووی والا کوڈ اس میں دخل نہ دے۔
+			// b. YouTube Search Selection (The Fix)
+			// اگر یوزر نے YouTube لسٹ کو ریپلائی کیا ہے
+			if session, ok := ytCache[qID]; ok {
+				// چیک کریں کہ ریپلائی کرنے والا وہی بندہ ہے جس نے سرچ کیا تھا
+				// نوٹ: یہ SenderID اکثر JID ہوتا ہے، اس لیے ہم User پارٹ میچ کریں گے
+				if strings.Contains(senderID, session.SenderID) || session.SenderID == v.Info.Sender.User {
+					delete(ytCache, qID) // کیش صاف کریں
+					
+					// ان پٹ کو نمبر میں تبدیل کریں
+					if index, err := strconv.Atoi(bodyClean); err == nil && index > 0 && index <= len(session.Results) {
+						selected := session.Results[index-1]
+						// ویڈیو ڈاؤنلوڈ پروسیس شروع کریں
+						go handleYTDownload(client, v, selected.Url, "3", false) // Default to mp4 (360p) or ask format
+					} else {
+						replyMessage(client, v, "❌ غلط نمبر! براہ کرم لسٹ میں سے درست نمبر منتخب کریں۔")
+					}
+					return
+				}
+			}
+
+			// c. YouTube Format Selection (اگر فارمیٹ مینو کھلا ہے)
 			if stateYT, ok := ytDownloadCache[qID]; ok && stateYT.BotLID == botID {
 				delete(ytDownloadCache, qID)
 				go handleYTDownload(client, v, stateYT.Url, bodyClean, (bodyClean == "4"))
 				return
 			}
+		}
 
-			// 🔥 3. Archive Movie Selection
-			// اب یہ تب ہی چلے گا جب اوپر والا یوٹیوب کا رپلائی نہ ہو۔
-			movieMutex.Lock()
-			_, isArchiveSearch := searchCache[senderID]
-			movieMutex.Unlock()
+		// 🔥 2. Archive Movie Selection (No Reply Needed Logic)
+		// یہ کوڈ تب چلتا ہے جب `searchCache` میں ڈیٹا ہو، چاہے ریپلائی نہ بھی کیا ہو
+		movieMutex.Lock()
+		_, isArchiveSearch := searchCache[senderID]
+		movieMutex.Unlock()
 
-			if isArchiveSearch {
-				// چیک کریں کہ میسج صرف نمبر ہے
-				if _, err := strconv.Atoi(bodyClean); err == nil {
-					go handleArchive(client, v, bodyClean)
-					return
-				}
-			}
-
-			// 🔥 4. AI CONTEXTUAL REPLY
-			if !isCommand {
-				if handleAIReply(client, v) {
-					return
-				}
+		if isArchiveSearch {
+			// اگر یوٹیوب کا کوئی سیشن نہیں چل رہا، تب ہی یہ چلے
+			if _, err := strconv.Atoi(bodyClean); err == nil {
+				go handleArchive(client, v, bodyClean)
+				return
 			}
 		}
 
-		// TikTok No-Command Reply
+		// 🔥 3. TikTok Format Selection
 		if _, ok := ttCache[senderID]; ok && !isCommand {
 			if bodyClean == "1" || bodyClean == "2" || bodyClean == "3" {
 				handleTikTokReply(client, v, bodyClean, senderID)
@@ -371,11 +380,15 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			}
 		}
 
-		// ⚡ D. SECURITY CHECKS (OPTIMIZED - LOCAL CHECK FIRST)
+		// 🔥 4. AI Contextual Reply
+		if !isCommand {
+			if handleAIReply(client, v) {
+				return
+			}
+		}
+
+		// ⚡ D. SECURITY CHECKS (OPTIMIZED)
 		if !isCommand && v.Info.IsGroup {
-			
-			// 🧠 STEP 1: FAST LOCAL CHECK (RAM ONLY)
-			// اگر میسج میں لنک یا میڈیا ہے ہی نہیں، تو Database یا Redis کو کال کرنے کی ضرورت نہیں۔
 			hasLink := false
 			bodyLower := strings.ToLower(bodyClean)
 			
@@ -394,7 +407,6 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 				}
 			}
 
-			// 2. "The Smart Eye" (For custom domains without http)
 			if !hasLink {
 				words := strings.Fields(bodyClean)
 				for _, w := range words {
@@ -411,20 +423,15 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 				}
 			}
 
-			// 3. Media Check
 			isImage := v.Message.ImageMessage != nil
 			isVideo := v.Message.VideoMessage != nil
 			isSticker := v.Message.StickerMessage != nil
 
-			// 🛑 FAST RETURN: اگر میسج صاف ہے تو یہیں سے واپس جاؤ۔ سیٹنگ مت منگواؤ۔
 			if !hasLink && !isImage && !isVideo && !isSticker {
 				return
 			}
 
-			// 🧠 STEP 2: FETCH SETTINGS (اب منگواؤ کیونکہ شک پکا ہو گیا ہے)
 			s := getGroupSettings(botID, chatID)
-			
-			// اگر پرائیویٹ موڈ ہے تو کچھ نہ کریں۔
 			if s.Mode == "private" { return }
 
 			shouldCheck := false
@@ -435,12 +442,11 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 
 			if shouldCheck {
 				checkSecurity(client, v)
-				// سیکیورٹی چیک ہو گیا، اب فنکشن ختم۔
 				return 
 			}
 		}
 
-		// Anti-Spam Check (Restricted Groups)
+		// Anti-Spam Check
 		if RestrictedGroups[chatID] {
 			if !AuthorizedBots[botID] {
 				return
@@ -450,26 +456,20 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		// =========================================================
 		// 🚀 E. COMMAND HANDLING (Final Step)
 		// =========================================================
-		// اگر یہ کمانڈ نہیں ہے، تو اوپر والے چیکس سے گزر کر یہاں تک پہنچے گا ہی نہیں (اگر سیکیورٹی ٹرگر نہ ہو)
-		// لیکن اگر `isCommand` true ہے تو یہ سیدھا یہاں آئے گا۔
 		
 		if !isCommand {
 			return
 		}
 
-		// Command Argument Extraction
 		msgWithoutPrefix := strings.TrimPrefix(bodyClean, prefix)
 		words := strings.Fields(msgWithoutPrefix)
 		if len(words) == 0 {
 			return
 		}
 
-		parts := strings.Fields(bodyClean)
 		cmd := strings.ToLower(words[0])
-		args := parts[1:]
-		fullArgs := strings.TrimSpace(strings.Join(words[1:], " "))
-
-		// 🛡️ E. PERMISSION CHECK (Cached)
+		
+		// 🛡️ PERMISSION CHECK
 		if !canExecute(client, v, cmd) {
 			return
 		}
@@ -478,7 +478,6 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		fmt.Printf("🚀 [EXEC] Bot:%s | CMD:%s\n", botID, cmd)
 
 		// 🔥 F. THE SWITCH (Commands Execution)
-
 
 		switch cmd {
 
