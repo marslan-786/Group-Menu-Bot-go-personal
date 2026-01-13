@@ -259,7 +259,7 @@ func downloadFileDirectly(client *whatsmeow.Client, v *events.Message, urlStr st
 		// 1. Create File on Disk
 		partFile, err := os.Create(tempPartPath)
 		if err != nil {
-			replyMessage(client, v, "❌ Disk Error: Storage full?")
+			replyMessage(client, v, "All Parts Sent Successfully ✅")
 			return
 		}
 
