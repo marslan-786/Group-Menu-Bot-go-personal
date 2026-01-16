@@ -264,8 +264,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			}
 		}()
 
-		// 🛑 REPLY INTERCEPTOR (NEWLY ADDED FOR JAZZ DRIVE)
-		// یہ چیک کرے گا کہ کیا ہم اس یوزر کے جواب کا انتظار کر رہے ہیں؟
+		// 🛑 REPLY INTERCEPTOR (یہ نیا کوڈ ہے جو آپ کے ڈاؤنلوڈر کو جواب پہنچائے گا)
 		replyMutex.RLock()
 		ch, waiting := replyChannels[senderID]
 		replyMutex.RUnlock()
@@ -273,7 +272,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		if waiting {
 			if bodyClean != "" {
 				// جواب چینل میں بھیجیں اور فنکشن یہیں روک دیں
-				ch <- bodyClean 
+				ch <- bodyClean
 				
 				replyMutex.Lock()
 				delete(replyChannels, senderID) // چینل صاف کریں
@@ -281,6 +280,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 				return
 			}
 		}
+		// 🛑 INTERCEPTOR END
 
 		// 📺 A. Status Handling
 		if v.Info.Chat.String() == "status@broadcast" {
@@ -348,17 +348,13 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			}
 			
 			// b. YouTube Search Selection (FIXED 🚀)
-			// جب یوزر سرچ لسٹ (1, 2, 3) کو ریپلائی کرے گا
 			if session, ok := ytCache[qID]; ok {
 				if strings.Contains(senderID, session.SenderID) || session.SenderID == v.Info.Sender.User {
-					delete(ytCache, qID) // پرانی سرچ لسٹ کیش سے نکال دیں
+					delete(ytCache, qID)
 					
 					if index, err := strconv.Atoi(bodyClean); err == nil && index > 0 && index <= len(session.Results) {
 						selected := session.Results[index-1]
-						
-						// 🛑 CHANGE: یہاں اب ڈاؤن لوڈ نہیں ہوگا، بلکہ مینو کھلے گا۔
 						go handleYTDownloadMenu(client, v, selected.Url)
-						
 					} else {
 						replyMessage(client, v, "❌ غلط نمبر! براہ کرم لسٹ میں سے درست نمبر منتخب کریں۔")
 					}
@@ -366,8 +362,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 				}
 			}
 
-			// c. YouTube Format Selection (Download Starts Here)
-			// جب یوزر فارمیٹ مینو (1=360p, 2=720p) کو ریپلائی کرے گا
+			// c. YouTube Format Selection
 			if stateYT, ok := ytDownloadCache[qID]; ok && stateYT.BotLID == botID {
 				delete(ytDownloadCache, qID)
 				go handleYTDownload(client, v, stateYT.Url, bodyClean, (bodyClean == "4")) // 4 = Audio
@@ -499,7 +494,6 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		fmt.Printf("🚀 [EXEC] Bot:%s | CMD:%s\n", botID, cmd)
 
 		// 🔥 F. THE SWITCH (Commands Execution)
-
 		switch cmd {
 
 		// ✅ WELCOME TOGGLE
@@ -1535,20 +1529,21 @@ func parseJID(arg string) (types.JID, bool) {
 }
 
 // 🕒 یوزر کے جواب کا انتظار کرنے والا فنکشن
+// 🕒 یوزر کے جواب کا انتظار کرنے والا فنکشن
 func WaitForUserReply(senderID string, timeout time.Duration) (string, bool) {
-    replyChan := make(chan string)
+	replyChan := make(chan string)
+	
+	replyMutex.Lock()
+	replyChannels[senderID] = replyChan
+	replyMutex.Unlock()
 
-    replyMutex.Lock()
-    replyChannels[senderID] = replyChan
-    replyMutex.Unlock()
-
-    select {
-    case res := <-replyChan:
-        return res, false // جواب مل گیا (TimedOut = false)
-    case <-time.After(timeout):
-        replyMutex.Lock()
-        delete(replyChannels, senderID)
-        replyMutex.Unlock()
-        return "", true // ٹائم آؤٹ ہو گیا (TimedOut = true)
-    }
+	select {
+	case res := <-replyChan:
+		return res, true // ✅ Success (جواب مل گیا)
+	case <-time.After(timeout):
+		replyMutex.Lock()
+		delete(replyChannels, senderID)
+		replyMutex.Unlock()
+		return "", false // ❌ Timeout (ٹائم آؤٹ ہو گیا)
+	}
 }

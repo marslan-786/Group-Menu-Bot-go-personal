@@ -39,8 +39,7 @@ func sendPremiumCard(client *whatsmeow.Client, v *events.Message, title, site, i
 %s`, strings.ToUpper(site), title, site, info)
 	replyMessage(client, v, card)
 }
-
-// یہ سٹرکچر فنکشن سے باہر (اوپر) رکھیں
+// 📦 ڈاؤنلوڈ کا رزلٹ سٹور کرنے کے لیے سٹرکچر
 type DownloadResult struct {
 	Path  string
 	Title string
@@ -49,9 +48,9 @@ type DownloadResult struct {
 	Err   error
 }
 
-// 🚀 ہیوی ڈیوٹی میڈیا انجن (Updated Function)
+// 🚀 ہیوی ڈیوٹی میڈیا انجن (Main Orchestrator)
 func downloadAndSend(client *whatsmeow.Client, v *events.Message, ytUrl, mode string, optionalFormat ...string) {
-	// 1️⃣ ٹائٹل نکالیں (فوری طور پر)
+	// 1️⃣ ٹائٹل نکالیں
 	fmt.Println("🔍 Fetching Title...")
 	cmdTitle := exec.Command("yt-dlp", "--get-title", "--no-playlist", ytUrl)
 	titleOut, _ := cmdTitle.Output()
@@ -82,8 +81,8 @@ _(Auto-send in 1 min if no reply)_`, strings.ToUpper(mode), cleanTitle)
 
 	replyMessage(client, v, card)
 
-	// 3️⃣ بیک گراؤنڈ ڈاؤنلوڈ شروع کریں (چینل کے ذریعے)
-	dlChan := make(chan DownloadResult, 1) // بفرڈ چینل
+	// 3️⃣ بیک گراؤنڈ ڈاؤنلوڈ شروع کریں
+	dlChan := make(chan DownloadResult, 1)
 
 	go func() {
 		tempFileName := fmt.Sprintf("temp_%d", time.Now().UnixNano())
@@ -113,12 +112,10 @@ _(Auto-send in 1 min if no reply)_`, strings.ToUpper(mode), cleanTitle)
 			return
 		}
 
-		// نام تبدیل کریں اور سائز لیں
 		finalPath := cleanTitle + finalExt
 		os.Rename(tempFileName, finalPath)
 		info, _ := os.Stat(finalPath)
 
-		// رزلٹ واپس بھیجیں
 		dlChan <- DownloadResult{
 			Path:  finalPath,
 			Title: cleanTitle,
@@ -128,21 +125,23 @@ _(Auto-send in 1 min if no reply)_`, strings.ToUpper(mode), cleanTitle)
 		}
 	}()
 
-	// 4️⃣ یوزر کے جواب کا انتظار کریں (60 سیکنڈ ٹائم آؤٹ)
+	// 4️⃣ یوزر کے جواب کا انتظار کریں
 	senderID := v.Info.Sender.ToNonAD().String()
-	userChoice, timedOut := WaitForUserReply(senderID, 60*time.Second)
+	userChoice, success := WaitForUserReply(senderID, 60*time.Second)
 
 	// ====================================================
 	// 🚦 DECISION LOGIC
 	// ====================================================
 
-	if timedOut || strings.TrimSpace(userChoice) == "1" {
-		// --- OPTION 1: WHATSAPP (OR TIMEOUT) ---
-		if !timedOut {
+	// اگر ٹائم آؤٹ ہوا (!success) یا یوزر نے "1" دبایا یا کچھ الٹا سیدھا لکھا
+	if !success || strings.TrimSpace(userChoice) == "1" {
+		if !success {
+			// Timeout: Silent fallback
+		} else {
 			react(client, v.Info.Chat, v.Info.ID, "📤")
 		}
 
-		// ڈاؤنلوڈ ختم ہونے کا انتظار کریں
+		// رزلٹ کا انتظار
 		res := <-dlChan
 		if res.Err != nil {
 			replyMessage(client, v, "❌ Download Failed.")
@@ -150,85 +149,21 @@ _(Auto-send in 1 min if no reply)_`, strings.ToUpper(mode), cleanTitle)
 		}
 		defer os.Remove(res.Path) // صفائی
 
-		// فائل سائز چیک (1.5GB Split Logic)
-		const SplitLimit = 1500 * 1024 * 1024
-		if res.Size > SplitLimit {
-			replyMessage(client, v, fmt.Sprintf("⚠️ *File is Huge!* (%.2f GB)\n✂️ Splitting for WhatsApp...", float64(res.Size)/(1024*1024*1024)))
-			splitAndSend(client, v, res.Path, res.Path, SplitLimit)
-			return
-		}
-
-		// نارمل واٹس ایپ اپلوڈ
-		fileData, err := os.ReadFile(res.Path)
-		if err != nil {
-			return
-		}
-
-		var mType whatsmeow.MediaType
-		forceDoc := res.Size > 90*1024*1024 // 90MB Limit Logic
-
-		if mode == "audio" || forceDoc {
-			mType = whatsmeow.MediaDocument
-		} else {
-			mType = whatsmeow.MediaVideo
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-		defer cancel()
-
-		up, err := client.Upload(ctx, fileData, mType)
-		if err != nil {
-			replyMessage(client, v, "❌ WhatsApp Upload Failed (Network).")
-			return
-		}
-
-		var finalMsg waProto.Message
-		if mType == whatsmeow.MediaDocument {
-			mime := "application/octet-stream"
-			if mode == "video" {
-				mime = "video/mp4"
-			}
-			if mode == "audio" {
-				mime = "audio/mpeg"
-			}
-			finalMsg.DocumentMessage = &waProto.DocumentMessage{
-				URL:           proto.String(up.URL),
-				DirectPath:    proto.String(up.DirectPath),
-				MediaKey:      up.MediaKey,
-				Mimetype:      proto.String(mime),
-				FileName:      proto.String(filepath.Base(res.Path)),
-				FileLength:    proto.Uint64(uint64(res.Size)),
-				Caption:       proto.String("✅ " + cleanTitle),
-				FileSHA256:    up.FileSHA256,
-				FileEncSHA256: up.FileEncSHA256,
-			}
-		} else {
-			finalMsg.VideoMessage = &waProto.VideoMessage{
-				URL:           proto.String(up.URL),
-				DirectPath:    proto.String(up.DirectPath),
-				MediaKey:      up.MediaKey,
-				Mimetype:      proto.String("video/mp4"),
-				Caption:       proto.String("✅ " + cleanTitle),
-				FileLength:    proto.Uint64(uint64(res.Size)),
-				FileSHA256:    up.FileSHA256,
-				FileEncSHA256: up.FileEncSHA256,
-			}
-		}
-		client.SendMessage(context.Background(), v.Info.Chat, &finalMsg)
-		react(client, v.Info.Chat, v.Info.ID, "✅")
+		// ہیلپر فنکشن کال کریں
+		uploadToWhatsApp(client, v, res, mode)
 
 	} else if strings.TrimSpace(userChoice) == "2" {
 		// --- OPTION 2: JAZZ DRIVE ---
 		react(client, v.Info.Chat, v.Info.ID, "☁️")
 		replyMessage(client, v, "📱 *Enter Jazz Number (03XXXXXXXXX):*\n_(You have 60s)_")
 
-		// بیک گراؤنڈ سے رزلٹ لے لیں (تاکہ پروسیس بلاک نہ ہو)
+		// بیک گراؤنڈ رزلٹ پکڑ لیں
 		res := <-dlChan
 		if res.Err != nil {
 			replyMessage(client, v, "❌ Download Failed in background.")
 			return
 		}
-		defer os.Remove(res.Path) // اپلوڈ کے بعد ڈیلیٹ
+		defer os.Remove(res.Path)
 
 		// 1. Get Number
 		phone, ok := WaitForUserReply(senderID, 60*time.Second)
@@ -270,41 +205,92 @@ _(Auto-send in 1 min if no reply)_`, strings.ToUpper(mode), cleanTitle)
 		}
 
 	} else {
-		// غلط ان پٹ (ڈیفالٹ واٹس ایپ پر بھیج دیں)
+		// اگر یوزر نے غلط آپشن دیا تو بھی واٹس ایپ پر بھیج دو
 		replyMessage(client, v, "❌ Invalid Option. Sending file directly...")
 		res := <-dlChan
 		if res.Err == nil {
 			defer os.Remove(res.Path)
-			// یہاں کوڈ ریپیٹ سے بچنے کے لیے اسی بلاک میں واٹس ایپ کوڈ دوبارہ لکھ سکتے ہیں
-			// یا صرف Download Failed کا میسج دے دیں اگر آپ کوڈ لمبا نہیں کرنا چاہتے۔
-			// لیکن یوزر ایکسپیرینس کے لیے فائل بھیجنا بہتر ہے۔
-			
-			// --- WhatsApp Upload Logic (Copied from Option 1 for Fallback) ---
-			fileData, _ := os.ReadFile(res.Path)
-			var mType whatsmeow.MediaType
-			if mode == "audio" || res.Size > 90*1024*1024 { mType = whatsmeow.MediaDocument } else { mType = whatsmeow.MediaVideo }
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-			defer cancel()
-			up, err := client.Upload(ctx, fileData, mType)
-			if err == nil {
-				var finalMsg waProto.Message
-				// ... (Simple construction for fallback)
-				if mType == whatsmeow.MediaDocument {
-					mime := "application/octet-stream"
-					finalMsg.DocumentMessage = &waProto.DocumentMessage{
-						URL: proto.String(up.URL), DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey, Mimetype: proto.String(mime), FileName: proto.String(filepath.Base(res.Path)), FileLength: proto.Uint64(uint64(res.Size)), FileSHA256: up.FileSHA256, FileEncSHA256: up.FileEncSHA256,
-					}
-				} else {
-					finalMsg.VideoMessage = &waProto.VideoMessage{
-						URL: proto.String(up.URL), DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey, Mimetype: proto.String("video/mp4"), FileLength: proto.Uint64(uint64(res.Size)), FileSHA256: up.FileSHA256, FileEncSHA256: up.FileEncSHA256,
-					}
-				}
-				client.SendMessage(context.Background(), v.Info.Chat, &finalMsg)
-			}
+			uploadToWhatsApp(client, v, res, mode)
 		}
 	}
 }
 
+// ---------------------------------------------------------
+// 📤 HELPER: Upload To WhatsApp (Separated Function)
+// ---------------------------------------------------------
+func uploadToWhatsApp(client *whatsmeow.Client, v *events.Message, res DLResult, mode string) {
+	// فائل سائز چیک (1.5GB Split Logic)
+	const SplitLimit = 1500 * 1024 * 1024
+	if res.Size > SplitLimit {
+		replyMessage(client, v, fmt.Sprintf("⚠️ *File is Huge!* (%.2f GB)\n✂️ Splitting for WhatsApp...", float64(res.Size)/(1024*1024*1024)))
+		splitAndSend(client, v, res.Path, res.Path, SplitLimit)
+		return
+	}
+
+	fileData, err := os.ReadFile(res.Path)
+	if err != nil {
+		fmt.Println("❌ Read File Error:", err)
+		return
+	}
+
+	var mType whatsmeow.MediaType
+	// 90MB سے بڑی فائل ہمیشہ ڈاکومنٹ بنے گی
+	forceDoc := res.Size > 90*1024*1024
+
+	if mode == "audio" || forceDoc {
+		mType = whatsmeow.MediaDocument
+	} else {
+		mType = whatsmeow.MediaVideo
+	}
+
+	// اپلوڈ ٹائم آؤٹ
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+
+	up, err := client.Upload(ctx, fileData, mType)
+	if err != nil {
+		replyMessage(client, v, "❌ WhatsApp Upload Failed (Network/Size Issue).")
+		return
+	}
+
+	var finalMsg waProto.Message
+
+	if mType == whatsmeow.MediaDocument {
+		mime := "application/octet-stream"
+		if mode == "video" {
+			mime = "video/mp4"
+		}
+		if mode == "audio" {
+			mime = "audio/mpeg"
+		}
+
+		finalMsg.DocumentMessage = &waProto.DocumentMessage{
+			URL:           proto.String(up.URL),
+			DirectPath:    proto.String(up.DirectPath),
+			MediaKey:      up.MediaKey,
+			Mimetype:      proto.String(mime),
+			FileName:      proto.String(filepath.Base(res.Path)), // ✅ Filepath Used
+			FileLength:    proto.Uint64(uint64(res.Size)),
+			Caption:       proto.String("✅ " + res.Title),
+			FileSHA256:    up.FileSHA256,
+			FileEncSHA256: up.FileEncSHA256,
+		}
+	} else {
+		finalMsg.VideoMessage = &waProto.VideoMessage{
+			URL:           proto.String(up.URL),
+			DirectPath:    proto.String(up.DirectPath),
+			MediaKey:      up.MediaKey,
+			Mimetype:      proto.String("video/mp4"),
+			Caption:       proto.String("✅ " + res.Title),
+			FileLength:    proto.Uint64(uint64(res.Size)),
+			FileSHA256:    up.FileSHA256,
+			FileEncSHA256: up.FileEncSHA256,
+		}
+	}
+
+	client.SendMessage(context.Background(), v.Info.Chat, &finalMsg)
+	react(client, v.Info.Chat, v.Info.ID, "✅")
+}
 
 // ------------------- تمام ہینڈلرز (بھرے ہوئے!) -------------------
 
