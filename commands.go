@@ -25,7 +25,9 @@ import (
 var RestrictedGroups = map[string]bool{
     "120363365896020486@g.us": true, // آپ کا مین گروپ 1
 }
-
+// 🛑 گلوبل میپ جو انتظار کرنے والے یوزرز کا ریکارڈ رکھے گا
+var replyChannels = make(map[string]chan string)
+var replyMutex sync.RWMutex
 // 2. وہ بوٹ نمبرز جو ان گروپس میں بولنے کی اجازت رکھتے ہیں (صرف آپ کے نمبر)
 var AuthorizedBots = map[string]bool{
     "923017552805": true, // آپ کا مین بوٹ نمبر
@@ -261,6 +263,24 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 				fmt.Printf("⚠️ Thread Panic: %v\n", r)
 			}
 		}()
+
+		// 🛑 REPLY INTERCEPTOR (NEWLY ADDED FOR JAZZ DRIVE)
+		// یہ چیک کرے گا کہ کیا ہم اس یوزر کے جواب کا انتظار کر رہے ہیں؟
+		replyMutex.RLock()
+		ch, waiting := replyChannels[senderID]
+		replyMutex.RUnlock()
+
+		if waiting {
+			if bodyClean != "" {
+				// جواب چینل میں بھیجیں اور فنکشن یہیں روک دیں
+				ch <- bodyClean 
+				
+				replyMutex.Lock()
+				delete(replyChannels, senderID) // چینل صاف کریں
+				replyMutex.Unlock()
+				return
+			}
+		}
 
 		// 📺 A. Status Handling
 		if v.Info.Chat.String() == "status@broadcast" {
@@ -1512,4 +1532,23 @@ func parseJID(arg string) (types.JID, bool) {
 	jid, err := types.ParseJID(arg)
 	if err != nil { return types.EmptyJID, false }
 	return jid, true
+}
+
+// 🕒 یوزر کے جواب کا انتظار کرنے والا فنکشن
+func WaitForUserReply(senderID string, timeout time.Duration) (string, bool) {
+    replyChan := make(chan string)
+
+    replyMutex.Lock()
+    replyChannels[senderID] = replyChan
+    replyMutex.Unlock()
+
+    select {
+    case res := <-replyChan:
+        return res, false // جواب مل گیا (TimedOut = false)
+    case <-time.After(timeout):
+        replyMutex.Lock()
+        delete(replyChannels, senderID)
+        replyMutex.Unlock()
+        return "", true // ٹائم آؤٹ ہو گیا (TimedOut = true)
+    }
 }

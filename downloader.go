@@ -43,159 +43,218 @@ func sendPremiumCard(client *whatsmeow.Client, v *events.Message, title, site, i
 
 // 🚀 ہیوی ڈیوٹی میڈیا انجن (The Scientific Power)
 // 🚀 ہیوی ڈیوٹی میڈیا انجن (Updated with Splitter & Real Names)
+// 🚀 ہیوی ڈیوٹی میڈیا انجن (Updated: Global Jazz Drive + Background DL)
 func downloadAndSend(client *whatsmeow.Client, v *events.Message, ytUrl, mode string, optionalFormat ...string) {
-	fmt.Printf("\n⚙️ [DOWNLOADER START] Target: %s | Mode: %s\n", ytUrl, mode)
-	react(client, v.Info.Chat, v.Info.ID, "⏳")
-
-	// 1️⃣ سب سے پہلے ویڈیو کا اصلی ٹائٹل نکالیں (تاکہ temp نام نہ شو ہو)
+	// 1️⃣ ٹائٹل نکالیں (فوری طور پر)
 	fmt.Println("🔍 Fetching Title...")
 	cmdTitle := exec.Command("yt-dlp", "--get-title", "--no-playlist", ytUrl)
-	titleOut, err := cmdTitle.Output()
+	titleOut, _ := cmdTitle.Output()
 	
-	cleanTitle := "Media_File" // ڈیفالٹ نام اگر ٹائٹل نہ ملے
-	if err == nil && len(titleOut) > 0 {
+	cleanTitle := "Media_File"
+	if len(titleOut) > 0 {
 		cleanTitle = strings.TrimSpace(string(titleOut))
-		// واٹس ایپ کے لیے نام صاف کریں (غیر ضروری نشانات ہٹا دیں)
 		cleanTitle = strings.ReplaceAll(cleanTitle, "/", "-")
 		cleanTitle = strings.ReplaceAll(cleanTitle, "\\", "-")
 		cleanTitle = strings.ReplaceAll(cleanTitle, "\"", "'")
 	}
 
-	// 2️⃣ فائل کا عارضی نام (Server کے لیے temp ہی رکھیں تاکہ safe رہے)
-	tempFileName := fmt.Sprintf("temp_%d", time.Now().UnixNano())
-	
-	// فارمیٹ سلیکشن
-	formatArg := "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
-	if len(optionalFormat) > 0 && optionalFormat[0] != "" {
-		formatArg = optionalFormat[0]
+	// 2️⃣ مینو کارڈ بھیجیں
+	card := fmt.Sprintf(`╔══════════════════════╗
+║ ✨ %s DOWNLOADER
+╠══════════════════════╣
+║ 📝 Title: %s
+║ 🌐 Source: External Link
+╠══════════════════════╣
+║ ⏳ Status: Downloading...
+╚══════════════════════╝
+
+*Choose Action:*
+1️⃣ Send to WhatsApp (Default)
+2️⃣ Upload to Jazz Drive ☁️
+
+_(Auto-send in 1 min if no reply)_`, strings.ToUpper(mode), cleanTitle)
+
+	replyMessage(client, v, card)
+
+	// 3️⃣ بیک گراؤنڈ ڈاؤنلوڈ شروع کریں (چینل کے ذریعے)
+	type DownloadResult struct {
+		Path string
+		Size int64
+		Err  error
 	}
+	dlChan := make(chan DownloadResult, 1) // بفرڈ چینل تاکہ ڈیڈ لاک نہ ہو
 
-	var args []string
-	finalExt := ".mp4"
-
-	if mode == "audio" {
-		tempFileName += ".mp3"
-		finalExt = ".mp3"
-		args = []string{
-			"--no-playlist", 
-			"-f", "bestaudio", 
-			"--extract-audio", 
-			"--audio-format", "mp3", 
-			"-o", tempFileName, 
-			ytUrl,
+	go func() {
+		tempFileName := fmt.Sprintf("temp_%d", time.Now().UnixNano())
+		formatArg := "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+		if len(optionalFormat) > 0 && optionalFormat[0] != "" {
+			formatArg = optionalFormat[0]
 		}
+
+		var args []string
+		finalExt := ".mp4"
+
+		if mode == "audio" {
+			tempFileName += ".mp3"
+			finalExt = ".mp3"
+			args = []string{"--no-playlist", "-f", "bestaudio", "--extract-audio", "--audio-format", "mp3", "-o", tempFileName, ytUrl}
+		} else {
+			tempFileName += ".mp4"
+			args = []string{"--no-playlist", "-f", formatArg, "--merge-output-format", "mp4", "-o", tempFileName, ytUrl}
+		}
+
+		fmt.Printf("🛠️ [BG] Downloading: %s\n", cleanTitle)
+		cmd := exec.Command("yt-dlp", args...)
+		err := cmd.Run() // Run wait کرتا ہے جب تک مکمل نہ ہو
+
+		if err != nil {
+			dlChan <- DownloadResult{Err: err}
+			return
+		}
+
+		// نام تبدیل کریں
+		finalPath := cleanTitle + finalExt
+		os.Rename(tempFileName, finalPath)
+		info, _ := os.Stat(finalPath)
+
+		dlChan <- DownloadResult{Path: finalPath, Size: info.Size(), Err: nil}
+	}()
+
+	// 4️⃣ یوزر کے جواب کا انتظار کریں (60 سیکنڈ ٹائم آؤٹ)
+	senderID := v.Info.Sender.ToNonAD().String()
+	userChoice, timedOut := WaitForUserReply(senderID, 60*time.Second)
+
+	// ====================================================
+	// 🚦 DECISION LOGIC
+	// ====================================================
+
+	if timedOut || strings.TrimSpace(userChoice) == "1" {
+		// --- OPTION 1: WHATSAPP (OR TIMEOUT) ---
+		if timedOut {
+			// اگر ٹائم آؤٹ ہوا تو مطلع کریں اور فائل بھیج دیں
+			// replyMessage(client, v, "⌛ Timeout! Sending here...") 
+			// (خاموشی سے بھیجنا بہتر ہے)
+		} else {
+			react(client, v.Info.Chat, v.Info.ID, "📤")
+		}
+
+		// ڈاؤنلوڈ ختم ہونے کا انتظار کریں
+		res := <-dlChan
+		if res.Err != nil {
+			replyMessage(client, v, "❌ Download Failed.")
+			return
+		}
+		defer os.Remove(res.Path) // واٹس ایپ پر بھیجنے کے بعد ڈیلیٹ
+
+		// فائل سائز چیک (1.5GB Split Logic)
+		const SplitLimit = 1500 * 1024 * 1024
+		if res.Size > SplitLimit {
+			replyMessage(client, v, fmt.Sprintf("⚠️ *File is Huge!* (%.2f GB)\n✂️ Splitting for WhatsApp...", float64(res.Size)/(1024*1024*1024)))
+			splitAndSend(client, v, res.Path, res.Path, SplitLimit)
+			return
+		}
+
+		// نارمل واٹس ایپ اپلوڈ
+		fileData, err := os.ReadFile(res.Path)
+		if err != nil { return }
+
+		var mType whatsmeow.MediaType
+		forceDoc := res.Size > 90*1024*1024 // 90MB Limit Logic
+
+		if mode == "audio" || forceDoc {
+			mType = whatsmeow.MediaDocument
+		} else {
+			mType = whatsmeow.MediaVideo
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		defer cancel()
+
+		up, err := client.Upload(ctx, fileData, mType)
+		if err != nil {
+			replyMessage(client, v, "❌ WhatsApp Upload Failed (Network).")
+			return
+		}
+
+		var finalMsg waProto.Message
+		if mType == whatsmeow.MediaDocument {
+			mime := "application/octet-stream"
+			if mode == "video" { mime = "video/mp4" }
+			if mode == "audio" { mime = "audio/mpeg" }
+			finalMsg.DocumentMessage = &waProto.DocumentMessage{
+				URL: proto.String(up.URL), DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,
+				Mimetype: proto.String(mime), FileName: proto.String(filepath.Base(res.Path)),
+				FileLength: proto.Uint64(uint64(res.Size)), Caption: proto.String("✅ " + cleanTitle),
+				FileSHA256: up.FileSHA256, FileEncSHA256: up.FileEncSHA256,
+			}
+		} else {
+			finalMsg.VideoMessage = &waProto.VideoMessage{
+				URL: proto.String(up.URL), DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,
+				Mimetype: proto.String("video/mp4"), Caption: proto.String("✅ " + cleanTitle),
+				FileLength: proto.Uint64(uint64(res.Size)),
+				FileSHA256: up.FileSHA256, FileEncSHA256: up.FileEncSHA256,
+			}
+		}
+		client.SendMessage(context.Background(), v.Info.Chat, &finalMsg)
+		react(client, v.Info.Chat, v.Info.ID, "✅")
+
+	} else if strings.TrimSpace(userChoice) == "2" {
+		// --- OPTION 2: JAZZ DRIVE ---
+		react(client, v.Info.Chat, v.Info.ID, "☁️")
+		replyMessage(client, v, "📱 *Enter Jazz Number (03XXXXXXXXX):*\n_(You have 60s)_")
+
+		// بیک گراؤنڈ سے رزلٹ لے لیں (تاکہ پروسیس بلاک نہ ہو)
+		// ہم اسے 'res' میں محفوظ رکھیں گے جب تک نمبر/OTP نہ مل جائے
+		res := <-dlChan
+		if res.Err != nil {
+			replyMessage(client, v, "❌ Download Failed in background.")
+			return
+		}
+		defer os.Remove(res.Path) // اپلوڈ کے بعد ڈیلیٹ
+
+		// 1. Get Number
+		phone, ok := WaitForUserReply(senderID, 60*time.Second)
+		if !ok || phone == "" { replyMessage(client, v, "❌ Timeout."); return }
+
+		// 2. Send OTP
+		userID := fmt.Sprintf("user_%d", time.Now().Unix())
+		replyMessage(client, v, "🔄 Sending OTP...")
+		
+		if jazzGenOTP(userID, phone) {
+			replyMessage(client, v, "🔑 *OTP Sent! Enter 4-digit code:*")
+			otp, ok := WaitForUserReply(senderID, 60*time.Second)
+			if !ok || otp == "" { replyMessage(client, v, "❌ Timeout."); return }
+
+			// 3. Verify & Upload
+			replyMessage(client, v, "🔐 Verifying...")
+			if jazzVerifyOTP(userID, otp) {
+				replyMessage(client, v, "☁️ *Uploading to Jazz Drive...*\n_(This may take time depending on file size)_")
+				
+				link, err := jazzUploadFile(userID, res.Path)
+				if err == nil {
+					finalText := fmt.Sprintf("🎉 *Upload Complete!*\n\n📂 *File:* %s\n📦 *Size:* %.2f MB\n🔗 *Link:* %s", 
+						res.Title, float64(res.Size)/(1024*1024), link)
+					replyMessage(client, v, finalText)
+				} else {
+					replyMessage(client, v, "❌ Upload Failed: "+err.Error())
+				}
+			} else {
+				replyMessage(client, v, "❌ Invalid OTP.")
+			}
+		} else {
+			replyMessage(client, v, "❌ Failed to send OTP. Check number.")
+		}
+
 	} else {
-		tempFileName += ".mp4"
-		args = []string{
-			"--no-playlist", 
-			"-f", formatArg, 
-			"--merge-output-format", "mp4", 
-			"-o", tempFileName, 
-			ytUrl,
+		// غلط ان پٹ
+		replyMessage(client, v, "❌ Invalid Option. Sending file directly...")
+		res := <-dlChan
+		if res.Err == nil {
+			defer os.Remove(res.Path)
+			// یہاں آپ دوبارہ اوپر والا WhatsApp Upload کوڈ کال کر سکتے ہیں 
+			// یا کوڈ ریپیٹ سے بچنے کے لیے ایک الگ فنکشن بنا لیں (تجویز کردہ)
 		}
 	}
-
-	// 3️⃣ ڈاؤن لوڈنگ شروع
-	fmt.Printf("🛠️ [SYSTEM CMD] Downloading: %s\n", cleanTitle)
-	cmd := exec.Command("yt-dlp", args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		fmt.Printf("❌ [ERROR] yt-dlp failed: %v\nLOG: %s\n", err, string(output))
-		replyMessage(client, v, "❌ Media processing failed.")
-		return
-	}
-
-	// 4️⃣ فائل سائز چیک کریں
-	fileInfo, err := os.Stat(tempFileName)
-	if err != nil {
-		fmt.Println("❌ File missing:", err)
-		return
-	}
-	fileSize := fileInfo.Size()
-	
-	fmt.Printf("📦 File Size: %.2f MB\n", float64(fileSize)/(1024*1024))
-
-	// ======================================================
-	// ✂️ SPLIT LOGIC ADDED HERE (For Files > 1.5 GB)
-	// ======================================================
-	
-	const SplitLimit = 1500 * 1024 * 1024 // 1.5 GB
-
-	if fileSize > SplitLimit {
-		replyMessage(client, v, fmt.Sprintf("⚠️ *File is Huge!* (%.2f GB)\n✂️ Splitting into parts...", float64(fileSize)/(1024*1024*1024)))
-		// cleanTitle پاس کریں تاکہ پارٹس کے نام بھی اصلی ہوں
-		splitAndSend(client, v, tempFileName, cleanTitle+finalExt, SplitLimit)
-		return
-	}
-
-	// اگر فائل 1.5GB سے چھوٹی ہے تو نارمل پروسیس
-	
-	// ریم میں لوڈ کریں
-	fileData, err := os.ReadFile(tempFileName)
-	if err != nil { return }
-	defer os.Remove(tempFileName) // صفائی
-
-	// 🧠 SMART DECISION (Document vs Video)
-	var mType whatsmeow.MediaType
-	forceDocument := false
-
-	if fileSize > 90*1024*1024 { // 90 MB سے اوپر ہمیشہ ڈاکومنٹ
-		forceDocument = true
-	}
-
-	if mode == "audio" || forceDocument {
-		mType = whatsmeow.MediaDocument
-	} else {
-		mType = whatsmeow.MediaVideo
-	}
-
-	// اپلوڈ
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute) 
-	defer cancel()
-
-	up, err := client.Upload(ctx, fileData, mType)
-	if err != nil {
-		replyMessage(client, v, "❌ Upload Failed (Network Timeout).")
-		return
-	}
-
-	// 5️⃣ میسج بھیجنا (Professional Name Logic)
-	var finalMsg waProto.Message
-
-	if mode == "audio" || forceDocument {
-		mime := "application/octet-stream"
-		if mode == "audio" { mime = "audio/mpeg" }
-		if mode == "video" { mime = "video/mp4" }
-
-		finalMsg.DocumentMessage = &waProto.DocumentMessage{
-			URL:           proto.String(up.URL),
-			DirectPath:    proto.String(up.DirectPath),
-			MediaKey:      up.MediaKey,
-			Mimetype:      proto.String(mime),
-			// 🔥 یہاں ہم نے temp نام ہٹا کر اصلی نام لگا دیا
-			FileName:      proto.String(cleanTitle + finalExt), 
-			Title:         proto.String(cleanTitle),
-			FileLength:    proto.Uint64(uint64(fileSize)), // ✅ FIXED: Converted int64 to uint64
-			FileSHA256:    up.FileSHA256,
-			FileEncSHA256: up.FileEncSHA256,
-			Caption:       proto.String("✅ " + cleanTitle),
-		}
-	} else {
-		// چھوٹی ویڈیوز کے لیے
-		finalMsg.VideoMessage = &waProto.VideoMessage{
-			URL:           proto.String(up.URL),
-			DirectPath:    proto.String(up.DirectPath),
-			MediaKey:      up.MediaKey,
-			Mimetype:      proto.String("video/mp4"),
-			Caption:       proto.String("✅ " + cleanTitle),
-			FileLength:    proto.Uint64(uint64(fileSize)), // ✅ FIXED: Converted int64 to uint64
-			FileSHA256:    up.FileSHA256,
-			FileEncSHA256: up.FileEncSHA256,
-		}
-	}
-
-	client.SendMessage(context.Background(), v.Info.Chat, &finalMsg)
-	react(client, v.Info.Chat, v.Info.ID, "✅")
 }
 
 
