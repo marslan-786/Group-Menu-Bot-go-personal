@@ -4,11 +4,7 @@
 FROM golang:1.24-bookworm AS go-builder
 
 RUN apt-get update && apt-get install -y \
-    gcc \
-    libc6-dev \
-    git \
-    libsqlite3-dev \
-    ffmpeg \
+    gcc libc6-dev git libsqlite3-dev ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -46,71 +42,39 @@ COPY lid-extractor.js ./
 RUN npm install --production
 
 # ═══════════════════════════════════════════════════════════
-# 3. Stage: Final Runtime (FIXED FOR TTS)
+# 3. Stage: Final Runtime (SUPER FAST EDITION)
 # ═══════════════════════════════════════════════════════════
-# 👇 تبدیلی: Python 3.12 کی جگہ 3.10 (کیونکہ TTS 3.12 پر نہیں چلتا)
 FROM python:3.10-slim-bookworm
 
-# ✅ سسٹم ٹولز (espeak-ng ایڈ کیا ہے جو TTS کے لیے لازمی ہے)
+# ✅ سسٹم ٹولز (FFmpeg ضروری ہے)
 RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    imagemagick \
-    curl \
-    sqlite3 \
-    libsqlite3-0 \
-    nodejs \
-    npm \
-    ca-certificates \
-    libgomp1 \
-    megatools \
-    libwebp-dev \
-    webp \
-    libwebpmux3 \
-    libwebpdemux2 \
-    libsndfile1 \
-    espeak-ng \
+    ffmpeg imagemagick curl sqlite3 libsqlite3-0 nodejs npm \
+    ca-certificates libgomp1 megatools libwebp-dev webp \
+    libwebpmux3 libwebpdemux2 libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
-# YT-DLP انسٹال کریں
+# YT-DLP
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
     && chmod a+rx /usr/local/bin/yt-dlp
 
-# ... (اوپر والا حصہ ویسا ہی رہے گا)
-
-# ✅ Python AI Libraries (FIXED VERSIONS)
-# ہم transformers کو 4.42.4 پر فکس کر رہے ہیں کیونکہ نیا ورژن BeamSearchScorer کا ایرر دیتا ہے
+# ✅ Python AI Libraries (LIGHTWEIGHT)
+# Coqui TTS کو ہٹا کر 'edge-tts' لگایا ہے جو راکٹ کی طرح تیز ہے
 RUN pip3 install --no-cache-dir \
-    torch torchaudio --index-url https://download.pytorch.org/whl/cu118 || true \
-    && pip3 install --no-cache-dir \
-    transformers==4.42.4 \
-    onnxruntime \
-    rembg[cli] \
-    fastapi \
-    uvicorn \
-    python-multipart \
-    requests \
-    faster-whisper \
-    TTS \
-    scipy
-
-# ... (باقی نیچے والا کوڈ ویسا ہی رہے گا)
-
-# ✅ Coqui TTS لائسنس
-ENV COQUI_TOS_AGREED=1
+    fastapi uvicorn python-multipart requests \
+    faster-whisper edge-tts asyncio
 
 WORKDIR /app
 
-# پرانی سٹیجز سے فائلیں کاپی کریں
+# کاپی فائلز
 COPY --from=go-builder /app/bot ./bot
 COPY --from=node-builder /app/node_modules ./node_modules
 COPY --from=node-builder /app/lid-extractor.js ./lid-extractor.js
 COPY --from=node-builder /app/package.json ./package.json
 
-# لوکل فائلیں کاپی کریں
 COPY web ./web
 COPY pic.png ./pic.png
 COPY ai_engine.py ./ai_engine.py
-COPY voices ./voices
+# Voices فولڈر کی اب ضرورت نہیں رہی، ایج ٹی ٹی ایس کلاؤڈ یوز کرتا ہے
 
 RUN mkdir -p store logs
 ENV PORT=8080
@@ -118,5 +82,4 @@ ENV NODE_ENV=production
 ENV U2NET_HOME=/app/store/.u2net 
 EXPOSE 8080
 
-# بوٹ چلائیں
 CMD ["/app/bot"]

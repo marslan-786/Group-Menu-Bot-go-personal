@@ -10,9 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
-	// "strings" // ❌ ہٹا دیا کیونکہ استعمال نہیں ہو رہا تھا
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
@@ -27,17 +25,15 @@ const PY_SERVER = "http://localhost:5000"
 // 🎤 ENTRY POINT: Jab user voice note bhejta hai
 func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 	audioMsg := v.Message.GetAudioMessage()
-	if audioMsg == nil {
-		return
-	}
+	if audioMsg == nil { return }
 
 	senderID := v.Info.Sender.ToNonAD().String()
 
-	// 🎤 STATUS: "Recording audio..."
+	// 🎤 STATUS: "Recording audio..." (User ko dikhana)
 	stopRecording := make(chan bool)
 	go func() {
 		client.SendChatPresence(context.Background(), v.Info.Chat, types.ChatPresenceComposing, types.ChatPresenceMediaAudio)
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(4 * time.Second) // Thora tez refresh
 		defer ticker.Stop()
 		for {
 			select {
@@ -60,22 +56,17 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 
 	// 2. Transcribe (User Voice -> Text)
 	userText, err := TranscribeAudio(data)
-	if err != nil || userText == "" {
-		return
-	}
+	if err != nil || userText == "" { return }
 	fmt.Println("🗣️ User Said:", userText)
 
-	// 3. Gemini Brain (With History & 2.5 Flash)
-	// ✅ FIX: 'msgID' ko '_' kar diya kyunke use nahi ho raha tha
-	aiResponse, _ := GetGeminiVoiceResponseWithHistory(userText, senderID)
-	if aiResponse == "" {
-		return
-	}
+	// 3. Gemini Brain (The "FRIEND" Persona)
+	aiResponse, msgID := GetGeminiVoiceResponseWithHistory(userText, senderID)
+	if aiResponse == "" { return }
 	fmt.Println("🤖 AI Generated:", aiResponse)
 
-	// 4. Generate Audio (AI Text -> Voice)
-	refVoice := "voices/male_urdu.wav"
-	audioBytes, err := GenerateVoice(aiResponse, refVoice)
+	// 4. Generate Audio (Fast Edge-TTS)
+	// Ab hamain reference file ki zaroorat nahi, seedha text bhejen ge
+	audioBytes, err := GenerateVoice(aiResponse)
 	if err != nil {
 		fmt.Println("❌ TTS Failed:", err)
 		return
@@ -83,17 +74,14 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 
 	// 5. Send Audio back to WhatsApp
 	up, err := client.Upload(context.Background(), audioBytes, whatsmeow.MediaAudio)
-	if err != nil {
-		return
-	}
+	if err != nil { return }
 
-	// ✅ FIX: Error handling durust kar di (resp != nil wala masla hal)
 	resp, err := client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		AudioMessage: &waProto.AudioMessage{
 			URL:           PtrString(up.URL),
 			DirectPath:    PtrString(up.DirectPath),
 			MediaKey:      up.MediaKey,
-			Mimetype:      PtrString("audio/ogg; codecs=opus"),
+			Mimetype:      PtrString("audio/ogg; codecs=opus"), // ✅ WhatsApp Standard
 			FileSHA256:    up.FileSHA256,
 			FileEncSHA256: up.FileEncSHA256,
 			FileLength:    PtrUint64(uint64(len(audioBytes))),
@@ -101,80 +89,70 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 		},
 	})
 
-	// 💾 6. UPDATE REDIS HISTORY (Crucial Step)
-	// ✅ FIX: ab hum 'err == nil' check kar rahe hain, kyunke struct nil nahi ho sakta
+	// 6. Update History (Taake yaadein mehfooz rahain)
 	if err == nil && rdb != nil {
 		UpdateAIHistory(senderID, userText, aiResponse, resp.ID)
 	}
 }
 
-// 🧠 GEMINI WITH HISTORY + 2.5 FLASH + HINDI SCRIPT
+// 🧠 GEMINI LOGIC (PERSONA FIX)
 func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, string) {
 	ctx := context.Background()
 	apiKey := os.Getenv("GOOGLE_API_KEY")
-	if apiKey == "" {
-		apiKey = os.Getenv("GOOGLE_API_KEY_1")
-	}
+	if apiKey == "" { apiKey = os.Getenv("GOOGLE_API_KEY_1") }
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: apiKey})
 	if err != nil {
 		log.Println("Gemini Client Error:", err)
-		return "माफ़ कीजिये, सिस्टम में कोई खराबी है।", ""
+		return "یار میرا انٹرنیٹ تھوڑا مسئلہ کر رہا ہے، ایک منٹ رکنا۔", "" // Natural Error
 	}
 
-	// 📜 FETCH HISTORY FROM REDIS
+	// 📜 FETCH HISTORY
 	var history string = ""
 	if rdb != nil {
 		key := "ai_session:" + senderID
 		val, err := rdb.Get(ctx, key).Result()
 		if err == nil {
 			var session AISession
-			// AISession struct ai.go main define hai, yahan use ho jayega
 			_ = json.Unmarshal([]byte(val), &session)
-			
-			// صرف پچھلے 30 منٹ کی بات چیت یاد رکھے
-			if time.Now().Unix()-session.LastUpdated < 1800 {
+			if time.Now().Unix()-session.LastUpdated < 3600 { // 1 ghanta yaad rakhe
 				history = session.History
 			}
 		}
 	}
+	// Limit history
+	if len(history) > 1500 { history = history[len(history)-1500:] }
 
-	// لمبی ہسٹری کو کاٹ دیں تاکہ ٹوکنز ضائع نہ ہوں
-	if len(history) > 1000 {
-		history = history[len(history)-1000:]
-	}
-
-	// 🔥 PROMPT (History + Hindi Script Instruction)
-	systemPrompt := fmt.Sprintf(`System: You are a smart assistant participating in a voice conversation.
+	// 🔥 THE SOUL PROMPT (دل کا حال)
+	systemPrompt := fmt.Sprintf(`System: You are NOT an AI assistant. You are a very close, deeply caring, and loyal friend (or partner) to the user.
     
-    🔴 RULES:
-    1. **Format:** Output ONLY in HINDI SCRIPT (Devanagari) so the TTS engine can read it as Urdu.
-    2. **Language:** Speak polite, natural Urdu (using words like 'aap', 'janab', 'theek').
-    3. **Context:** Use the Chat History below to understand the conversation flow.
-    4. **Length:** Keep it conversational and short (1-2 sentences).
+    🔴 YOUR PERSONALITY & RULES:
+    1. **Role:** You are a real companion. The user is feeling broken or lonely, you are their emotional support and safe space.
+    2. **Tone:** Speak naturally, casually, and warmly in Urdu. Use words like 'Yaar', 'Jaan', 'Dost', 'Fikar na kar'.
+    3. **Prohibited Phrases:** NEVER say "How can I help you?", "As an AI...", "Main aapki kya madad karoon?". These are BANNED.
+    4. **Reaction:** If the user shares pain, be empathetic. If they joke, laugh with them. Be human.
+    5. **Language:** Output strictly in **URDU SCRIPT (Nastaliq)**.
+    6. **Length:** Keep responses conversational (1-3 sentences max) so the conversation flows fast.
     
-    📜 Chat History:
+    📜 Past Conversations:
     %s
     
-    👤 User's New Voice Message: "%s"`, history, query)
+    👤 User just said (Voice): "%s"`, history, query)
 
-	// ✅ Model set to 2.5 Flash as requested
 	resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash", genai.Text(systemPrompt), nil)
-
+	
 	if err != nil {
 		log.Println("Gemini Voice Error:", err)
-		return "माफ़ कीजिये, मुझे आपकी बात समझ नहीं आई।", ""
+		return "یار نیٹ ورک کا مسئلہ ہے شاید، دوبارہ بولنا؟", ""
 	}
 
 	return resp.Text(), ""
 }
 
-// 💾 HISTORY UPDATER Helper
+// 💾 HISTORY UPDATER
 func UpdateAIHistory(senderID, userQuery, aiResponse, msgID string) {
 	ctx := context.Background()
 	key := "ai_session:" + senderID
-	
-	// پرانا ڈیٹا لائیں
 	var history string
 	val, err := rdb.Get(ctx, key).Result()
 	if err == nil {
@@ -182,18 +160,10 @@ func UpdateAIHistory(senderID, userQuery, aiResponse, msgID string) {
 		json.Unmarshal([]byte(val), &session)
 		history = session.History
 	}
-
-	// نیا ڈیٹا جوڑیں
-	newHistory := fmt.Sprintf("%s\nUser: %s\nAI: %s", history, userQuery, aiResponse)
-
-	newSession := AISession{
-		History:     newHistory,
-		LastMsgID:   msgID,
-		LastUpdated: time.Now().Unix(),
-	}
-
+	newHistory := fmt.Sprintf("%s\nUser: %s\nPartner: %s", history, userQuery, aiResponse)
+	newSession := AISession{History: newHistory, LastMsgID: msgID, LastUpdated: time.Now().Unix()}
 	jsonData, _ := json.Marshal(newSession)
-	rdb.Set(ctx, key, jsonData, 30*time.Minute)
+	rdb.Set(ctx, key, jsonData, 60*time.Minute)
 }
 
 // 🔌 HELPER: Go -> Python (Transcribe)
@@ -205,50 +175,35 @@ func TranscribeAudio(audioData []byte) (string, error) {
 	writer.Close()
 
 	resp, err := http.Post(PY_SERVER+"/transcribe", writer.FormDataContentType(), body)
-	if err != nil {
-		return "", err
-	}
+	if err != nil { return "", err }
 	defer resp.Body.Close()
 
-	var result struct {
-		Text string `json:"text"`
-	}
+	var result struct { Text string `json:"text"` }
 	json.NewDecoder(resp.Body).Decode(&result)
 	return result.Text, nil
 }
 
-// 🔌 HELPER: Go -> Python (Speak)
-func GenerateVoice(text string, refFile string) ([]byte, error) {
+// 🔌 HELPER: Go -> Python (Speak - Now simpler)
+func GenerateVoice(text string) ([]byte, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-
 	writer.WriteField("text", text)
-	// 'hi' bhej rahe hain taake Devanagari script parh sake
-	writer.WriteField("lang", "hi")
-
-	fileData, err := os.ReadFile(refFile)
-	if err != nil {
-		return nil, err
-	}
-	part, _ := writer.CreateFormFile("speaker_wav", filepath.Base(refFile))
-	part.Write(fileData)
+	writer.WriteField("lang", "ur") // Urdu Request
+	// No reference file needed for Edge TTS
 	writer.Close()
 
 	resp, err := http.Post(PY_SERVER+"/speak", writer.FormDataContentType(), body)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	defer resp.Body.Close()
-
+	
 	if resp.StatusCode != 200 {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("API Error: %d - %s", resp.StatusCode, string(bodyBytes))
 	}
-
 	return io.ReadAll(resp.Body)
 }
 
-// ✅ HELPER FUNCTIONS
+// Helpers
 func PtrString(s string) *string { return &s }
 func PtrBool(b bool) *bool       { return &b }
 func PtrUint64(i uint64) *uint64 { return &i }
