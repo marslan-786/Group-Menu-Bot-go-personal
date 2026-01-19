@@ -138,7 +138,7 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 	// نوٹ: اگر ماڈل کا نام غلط ہوا تو یہیں ایرر آئے گا
 	result, err := genaiClient.Models.GenerateContent(
 		ctx,
-		"gemini-2.5-flash", // میک شور کریں کہ یہ ماڈل آپ کے اکاؤنٹ پر ایکٹو ہے
+		"gemini-1.5-flash", // میک شور کریں کہ یہ ماڈل آپ کے اکاؤنٹ پر ایکٹو ہے
 		genai.Text(fullPrompt),
 		nil,
 	)
