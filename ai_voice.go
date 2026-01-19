@@ -228,22 +228,50 @@ func TranscribeAudio(audioData []byte) (string, error) {
 }
 
 // 🔌 HELPER: Go -> Python (Speak)
-func GenerateVoice(text string) ([]byte, error) {
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	writer.WriteField("text", text)
-	writer.WriteField("lang", "ur")
-	writer.Close()
+// ⚙️ SETTINGS
+// یہاں اپنے نئے پروجیکٹ کا URL ڈالیں جو ریلوے دے گا
+const VOICE_API_URL = "https://voice-real-production.up.railway.app/speak"
+const USE_REMOTE_VOICE = true // ✅ TRUE = High Quality, FALSE = Local gTTS
 
-	resp, err := http.Post(PY_SERVER+"/speak", writer.FormDataContentType(), body)
-	if err != nil { return nil, err }
-	defer resp.Body.Close()
+// 🔌 HELPER: Generate Voice (Switch Logic)
+func GenerateVoice(text string) ([]byte, error) {
 	
-	if resp.StatusCode != 200 {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API Error: %d - %s", resp.StatusCode, string(bodyBytes))
-	}
-	return io.ReadAll(resp.Body)
+    // 1️⃣ اگر ریموٹ سرور آن ہے، تو وہاں بھیجیں (High Quality)
+    if USE_REMOTE_VOICE {
+        fmt.Println("🌍 Sending to Voice Server (Project B)...")
+        
+        body := &bytes.Buffer{}
+        writer := multipart.NewWriter(body)
+        writer.WriteField("text", text)
+        writer.Close()
+
+        resp, err := http.Post(VOICE_API_URL, writer.FormDataContentType(), body)
+        if err != nil {
+            fmt.Println("❌ Remote Server Failed, switching to Local:", err)
+            // اگر فیل ہو جائے تو نیچے والا لوکل طریقہ چلے گا (Fallback)
+        } else {
+            defer resp.Body.Close()
+            if resp.StatusCode == 200 {
+                return io.ReadAll(resp.Body)
+            }
+            fmt.Println("⚠️ Remote Server Error:", resp.Status)
+        }
+    }
+
+    // 2️⃣ لوکل طریقہ (gTTS - Backup/Fast)
+    fmt.Println("🏠 Generating Locally (gTTS)...")
+    body := &bytes.Buffer{}
+    writer := multipart.NewWriter(body)
+    writer.WriteField("text", text)
+    writer.WriteField("lang", "ur") // Local Urdu
+    writer.Close()
+
+    // یہ لوکل Python سرور کو کال کرے گا (جو اسی کنٹینر میں ہے)
+    resp, err := http.Post("http://localhost:5000/speak", writer.FormDataContentType(), body)
+    if err != nil { return nil, err }
+    defer resp.Body.Close()
+    
+    return io.ReadAll(resp.Body)
 }
 
 func PtrString(s string) *string { return &s }
