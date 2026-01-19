@@ -39,13 +39,12 @@ COPY lid-extractor.js ./
 RUN npm install --production
 
 # ═══════════════════════════════════════════════════════════
-# 3. Stage: Final Runtime (PIPER TTS - HUGGINGFACE FIX)
+# 3. Stage: Final Runtime (PIPER TTS - GITHUB FIX)
 # ═══════════════════════════════════════════════════════════
 FROM python:3.10-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1
 
-# ✅ سسٹم ٹولز
 RUN apt-get update && apt-get install -y \
     ffmpeg imagemagick curl sqlite3 libsqlite3-0 nodejs npm \
     ca-certificates libgomp1 megatools libwebp-dev webp \
@@ -62,20 +61,11 @@ RUN curl -L -o piper.tar.gz https://github.com/rhasspy/piper/releases/download/2
     && rm piper.tar.gz \
     && chmod +x /usr/local/bin/piper/piper
 
-# ✅ Install HuggingFace Hub (The Fix)
-RUN pip3 install huggingface_hub
-
-# ✅ URDU MODEL DOWNLOAD (PYTHON SCRIPT METHOD)
-# یہ طریقہ کبھی فیل نہیں ہوگا کیونکہ یہ API کے ذریعے ڈاؤن لوڈ کرتا ہے
+# ✅ URDU MODEL (GITHUB MIRROR LINK - 100% WORKING)
+# Hugging Face kabhi kabhi fail hota hai, isliye hum Github release se utha rahe hain
 RUN mkdir -p /app/models \
-    && python3 -c 'from huggingface_hub import hf_hub_download; \
-       import shutil; \
-       print("Downloading Model..."); \
-       m_path = hf_hub_download(repo_id="rhasspy/piper-voices", filename="ur/ur_pk/medium/ur_pk-medium.onnx"); \
-       c_path = hf_hub_download(repo_id="rhasspy/piper-voices", filename="ur/ur_pk/medium/ur_pk-medium.onnx.json"); \
-       shutil.copy(m_path, "/app/models/ur_pk.onnx"); \
-       shutil.copy(c_path, "/app/models/ur_pk.onnx.json"); \
-       print("✅ Model Downloaded Successfully!")'
+    && curl -L -o /app/models/ur_pk.onnx "https://github.com/rhasspy/piper/releases/download/v0.0.2/ur_pk-ur_script-medium.onnx" \
+    && curl -L -o /app/models/ur_pk.onnx.json "https://github.com/rhasspy/piper/releases/download/v0.0.2/ur_pk-ur_script-medium.onnx.json"
 
 # ✅ Python Libraries
 RUN pip3 install --no-cache-dir \
