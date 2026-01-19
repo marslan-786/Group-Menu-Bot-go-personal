@@ -8,6 +8,7 @@ import (
 	"time"
     "log" 
     "os"
+    "sync"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
