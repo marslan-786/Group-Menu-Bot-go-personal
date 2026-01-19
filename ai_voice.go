@@ -10,11 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/binary/proto"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/types/events"
 )
@@ -42,19 +39,13 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 	}
 	
 	if userText == "" { return }
-	
-	// User ko batayen ke hum ne sun liya (Reply with text first)
-	// replyMessage(client, v, "🗣️ *You said:* "+userText) // Optional
 
 	// 3. Send Text to Gemini (Brain) -> Get Response
-	// Hum ai.go wala logic use karenge lekin response capture karenge
 	aiResponse := GetGeminiResponse(userText, v.Info.Sender.User)
 	
 	if aiResponse == "" { return }
 
 	// 4. Send Response to Python (Mouth) -> Get Audio
-	// Reference audio path (Apni pasand ki awaz project folder mein rakhen)
-	// Male ya Female select kar sakte hain based on logic
 	refVoice := "voices/male_urdu.wav" 
 	
 	audioBytes, err := GenerateVoice(aiResponse, refVoice)
@@ -68,16 +59,17 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 	up, err := client.Upload(context.Background(), audioBytes, whatsmeow.MediaAudio)
 	if err != nil { return }
 
+	// ✅ FIXED: Using helper functions instead of proto.String
 	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		AudioMessage: &waProto.AudioMessage{
-			URL:           proto.String(up.URL),
-			DirectPath:    proto.String(up.DirectPath),
+			URL:           PtrString(up.URL),
+			DirectPath:    PtrString(up.DirectPath),
 			MediaKey:      up.MediaKey,
-			Mimetype:      proto.String("audio/ogg; codecs=opus"),
+			Mimetype:      PtrString("audio/ogg; codecs=opus"),
 			FileSHA256:    up.FileSHA256,
 			FileEncSHA256: up.FileEncSHA256,
-			FileLength:    proto.Uint64(uint64(len(audioBytes))),
-			PTT:           proto.Bool(true), // Blue Mic (Voice Note)
+			FileLength:    PtrUint64(uint64(len(audioBytes))),
+			PTT:           PtrBool(true), // Blue Mic (Voice Note)
 		},
 	})
 }
@@ -133,6 +125,10 @@ func GenerateVoice(text string, refFile string) ([]byte, error) {
 func GetGeminiResponse(query, userID string) string {
     // Yahan aap apni ai.go wali logic use kar sakte hain
     // Filhal testing ke liye dummy return kar raha hun:
-    // Behtar ye hoga ke ai.go mein processAIConversation ko modify karke return string karwaya jaye
-    return "working"
+    return "آپ کا پیغام موصول ہو گیا ہے۔ میں اس پر کام کر رہا ہوں۔"
 }
+
+// ✅ HELPER FUNCTIONS (To Fix proto.String Errors)
+func PtrString(s string) *string { return &s }
+func PtrBool(b bool) *bool       { return &b }
+func PtrUint64(i uint64) *uint64 { return &i }

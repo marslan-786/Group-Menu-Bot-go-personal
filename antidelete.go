@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"encoding/json"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
