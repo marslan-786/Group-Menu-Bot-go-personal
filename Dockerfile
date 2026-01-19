@@ -40,13 +40,12 @@ WORKDIR /app
 COPY package*.json ./
 COPY lid-extractor.js ./
 RUN npm install --production
-
 # ═══════════════════════════════════════════════════════════
-# 3. Stage: Final Runtime (SUPER FAST EDITION)
+# 3. Stage: Final Runtime (FIXED TORCH VERSION)
 # ═══════════════════════════════════════════════════════════
 FROM python:3.10-slim-bookworm
 
-# ✅ سسٹم ٹولز (FFmpeg ضروری ہے)
+# ✅ سسٹم ٹولز
 RUN apt-get update && apt-get install -y \
     ffmpeg imagemagick curl sqlite3 libsqlite3-0 nodejs npm \
     ca-certificates libgomp1 megatools libwebp-dev webp \
@@ -57,11 +56,15 @@ RUN apt-get update && apt-get install -y \
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
     && chmod a+rx /usr/local/bin/yt-dlp
 
-# ✅ Python AI Libraries (LIGHTWEIGHT)
-# Coqui TTS کو ہٹا کر 'edge-tts' لگایا ہے جو راکٹ کی طرح تیز ہے
+# ✅ Python AI Libraries (TORCH ADDED BACK)
+# پہلے pytorch انسٹال کریں (CPU version for speed/stability)
+RUN pip3 install --no-cache-dir \
+    torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# پھر باقی لائبریریاں
 RUN pip3 install --no-cache-dir \
     fastapi uvicorn python-multipart requests \
-    faster-whisper edge-tts asyncio
+    faster-whisper edge-tts asyncio scipy
 
 WORKDIR /app
 
@@ -74,7 +77,6 @@ COPY --from=node-builder /app/package.json ./package.json
 COPY web ./web
 COPY pic.png ./pic.png
 COPY ai_engine.py ./ai_engine.py
-# Voices فولڈر کی اب ضرورت نہیں رہی، ایج ٹی ٹی ایس کلاؤڈ یوز کرتا ہے
 
 RUN mkdir -p store logs
 ENV PORT=8080

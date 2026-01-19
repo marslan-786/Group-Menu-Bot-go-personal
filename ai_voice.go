@@ -24,12 +24,14 @@ const PY_SERVER = "http://localhost:5000"
 
 // 🎤 ENTRY POINT: Jab user voice note bhejta hai
 func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
+	fmt.Println("🚀 AI Engine: Starting Voice Processing...") // LOG 1
+
 	audioMsg := v.Message.GetAudioMessage()
 	if audioMsg == nil { return }
 
 	senderID := v.Info.Sender.ToNonAD().String()
 
-	// 🎤 STATUS: "Recording audio..." (User ko dikhana)
+	// 🎤 STATUS START
 	stopRecording := make(chan bool)
 	go func() {
 		client.SendChatPresence(context.Background(), v.Info.Chat, types.ChatPresenceComposing, types.ChatPresenceMediaAudio)
@@ -47,33 +49,40 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 	}()
 	defer func() { stopRecording <- true }()
 
-	// 1. Download User's Voice
+	// 1. Download
+	fmt.Println("📥 AI Engine: Downloading Audio...") // LOG 2
 	data, err := client.Download(context.Background(), audioMsg)
 	if err != nil {
 		fmt.Println("❌ Download Failed:", err)
 		return
 	}
 
-	// 2. Transcribe (User Voice -> Text)
+	// 2. Transcribe
+	fmt.Println("👂 AI Engine: Transcribing Audio...") // LOG 3
 	userText, err := TranscribeAudio(data)
-	if err != nil || userText == "" { return }
-	fmt.Println("🗣️ User Said:", userText)
+	if err != nil || userText == "" { 
+		fmt.Println("❌ Transcribe Failed:", err)
+		return 
+	}
+	fmt.Println("🗣️ User Said:", userText) // LOG 4
 
-	// 3. Gemini Brain (The "FRIEND" Persona)
-	// ✅✅✅ FIX HERE: 'msgID' ko hata kar '_' laga diya hai
+	// 3. Gemini Brain
+	fmt.Println("🧠 AI Engine: Thinking...") // LOG 5
 	aiResponse, _ := GetGeminiVoiceResponseWithHistory(userText, senderID)
 	
 	if aiResponse == "" { return }
-	fmt.Println("🤖 AI Generated:", aiResponse)
+	fmt.Println("🤖 AI Generated:", aiResponse) // LOG 6
 
-	// 4. Generate Audio (Fast Edge-TTS)
+	// 4. Generate Audio
+	fmt.Println("🎙️ AI Engine: Generating Voice Reply...") // LOG 7
 	audioBytes, err := GenerateVoice(aiResponse)
 	if err != nil {
 		fmt.Println("❌ TTS Failed:", err)
 		return
 	}
 
-	// 5. Send Audio back to WhatsApp
+	// 5. Send
+	fmt.Println("📤 AI Engine: Uploading Voice Note...") // LOG 8
 	up, err := client.Upload(context.Background(), audioBytes, whatsmeow.MediaAudio)
 	if err != nil { return }
 
@@ -82,19 +91,23 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 			URL:           PtrString(up.URL),
 			DirectPath:    PtrString(up.DirectPath),
 			MediaKey:      up.MediaKey,
-			Mimetype:      PtrString("audio/ogg; codecs=opus"), // ✅ WhatsApp Standard
+			Mimetype:      PtrString("audio/ogg; codecs=opus"),
 			FileSHA256:    up.FileSHA256,
 			FileEncSHA256: up.FileEncSHA256,
 			FileLength:    PtrUint64(uint64(len(audioBytes))),
-			PTT:           PtrBool(true), // Blue Mic
+			PTT:           PtrBool(true),
 		},
 	})
 
-	// 6. Update History
 	if err == nil && rdb != nil {
 		UpdateAIHistory(senderID, userText, aiResponse, resp.ID)
+		fmt.Println("✅ AI Engine: Reply Sent Successfully!") // LOG 9
 	}
 }
+
+// ... باقی فنکشنز وہی پرانے ہیں ...
+// (GetGeminiVoiceResponseWithHistory, UpdateAIHistory, TranscribeAudio, GenerateVoice, PtrString...)
+// ان میں کوئی تبدیلی نہیں ہے، بس اوپر والا HandleVoiceMessage ریپلیس کریں۔
 
 // 🧠 GEMINI LOGIC (PERSONA FIX)
 func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, string) {
