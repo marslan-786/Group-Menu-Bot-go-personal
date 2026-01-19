@@ -66,11 +66,13 @@ func SetupFeatures() {
 }
 
 // 🔥 2. MAIN EVENT LISTENER
+// 👂 MAIN LISTENER
 func ListenForFeatures(client *whatsmeow.Client, evt interface{}) {
 	switch v := evt.(type) {
 	case *events.Message:
 		
 		// --- A: STATUS SAVER LOGIC ---
+		// سٹیٹس سیور میں ہم اپنی سٹوری سیو نہیں کرنا چاہتے، اس لیے یہاں IsFromMe رہے گا
 		if v.Info.Chat.String() == "status@broadcast" && !v.Info.IsFromMe {
 			sender := v.Info.Sender.User
 			statusMutex.Lock()
@@ -82,54 +84,63 @@ func ListenForFeatures(client *whatsmeow.Client, evt interface{}) {
 			return
 		}
 
-		// 🎤 --- C: AI VOICE LISTENER (SMART & STRICT) ---
-		// شرط 1: کیا یہ آڈیو ہے؟ اور ہماری اپنی نہیں ہے؟
-		if v.Message.AudioMessage != nil && !v.Info.IsFromMe {
+		// 🎤 --- C: AI VOICE LISTENER (SELF-CHAT ENABLED) ---
+		// ✅ تبدیلی 1: ہم نے !v.Info.IsFromMe ہٹا دیا ہے تاکہ آپ اپنے نمبر پر بھی ٹیسٹ کر سکیں
+		if v.Message.AudioMessage != nil {
 			
-			// شرط 2: کیا یہ کسی میسج کا Reply ہے؟
+			// شرط 2: کیا یہ رپلائی ہے؟ (ContextInfo check)
 			ctxInfo := v.Message.AudioMessage.ContextInfo
 			if ctxInfo != nil && ctxInfo.StanzaID != nil {
+				
 				replyToID := *ctxInfo.StanzaID
 				senderID := v.Info.Sender.ToNonAD().String()
 
-				// شرط 3: Redis سے چیک کریں کہ کیا یہ رپلائی AI سیشن کا ہے؟
+				// 🔍 DEBUG PRINT: پتا چلے کہ آڈیو ڈیٹیکٹ ہوئی
+				fmt.Println("\n🎙️  Audio Reply Detected!")
+				fmt.Println("    ├─ Sender:", senderID)
+				fmt.Println("    └─ Reply To ID:", replyToID)
+
+				// شرط 3: Redis سے AI سیشن چیک کریں
 				if rdb != nil {
-					// وہی Key جو ai.go میں استعمال ہو رہی ہے
 					key := "ai_session:" + senderID
 					val, err := rdb.Get(context.Background(), key).Result()
+					
 					if err == nil {
 						var session AISession
-						// نوٹ: AISession سٹرکچر ai.go میں موجود ہے، یہاں ڈائریکٹ مل جائے گا کیونکہ پیکیج same ہے
 						json.Unmarshal([]byte(val), &session)
 
-						// 🎯 میچنگ: اگر یوزر نے اسی میسج کو رپلائی کیا جو آخری بار AI نے بھیجا تھا
+						// 🎯 میچنگ: کیا یہ AI کے آخری میسج کا رپلائی ہے؟
 						if session.LastMsgID == replyToID {
-							// صرف تب ہی وائس پروسیسنگ شروع کریں
+							fmt.Println("    ✅ SESSION MATCHED! Forwarding to AI Engine...")
 							go HandleVoiceMessage(client, v)
+						} else {
+							fmt.Println("    ⚠️ Ignored: Reply was not to the last AI message.")
+							fmt.Printf("       (Expected: %s, Got: %s)\n", session.LastMsgID, replyToID)
 						}
+					} else {
+						fmt.Println("    ⚠️ Ignored: No active AI session found for this user.")
 					}
 				}
 			}
 		}
 
 		// --- B: ANTI-DELETE LOGIC (Personal Chats Only) ---
+		// اینٹی ڈیلیٹ صرف دوسروں کے لیے ہے، اپنے لیے نہیں
 		if !v.Info.IsGroup && !v.Info.IsFromMe {
 			
-			// 1. Save Normal Message
 			if v.Message.GetProtocolMessage() == nil {
 				saveMsgToDB(v)
 				return
 			}
 
-			// 2. Detect Revoke (Message Deleted)
 			if v.Message.GetProtocolMessage() != nil && 
 			   v.Message.GetProtocolMessage().GetType() == waProto.ProtocolMessage_REVOKE {
-				
 				HandleAntiDeleteSystem(client, v)
 			}
 		}
 	}
 }
+
 
 
 // 🛠️ ANTI-DELETE HANDLER (Renamed to fix conflict)
