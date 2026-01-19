@@ -40,8 +40,9 @@ WORKDIR /app
 COPY package*.json ./
 COPY lid-extractor.js ./
 RUN npm install --production
+
 # ═══════════════════════════════════════════════════════════
-# 3. Stage: Final Runtime (FIXED TORCH VERSION)
+# 3. Stage: Final Runtime (PIPER TTS - CPU OPTIMIZED)
 # ═══════════════════════════════════════════════════════════
 FROM python:3.10-slim-bookworm
 
@@ -49,22 +50,30 @@ FROM python:3.10-slim-bookworm
 RUN apt-get update && apt-get install -y \
     ffmpeg imagemagick curl sqlite3 libsqlite3-0 nodejs npm \
     ca-certificates libgomp1 megatools libwebp-dev webp \
-    libwebpmux3 libwebpdemux2 libsndfile1 \
+    libwebpmux3 libwebpdemux2 libsndfile1 wget \
     && rm -rf /var/lib/apt/lists/*
 
 # YT-DLP
 RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
     && chmod a+rx /usr/local/bin/yt-dlp
 
-# ✅ Python AI Libraries (TORCH ADDED BACK)
-# پہلے pytorch انسٹال کریں (CPU version for speed/stability)
-RUN pip3 install --no-cache-dir \
-    torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+# ✅ PIPER TTS DOWNLOAD (The Magic)
+# 1. Download Piper Binary
+RUN wget -O piper.tar.gz https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_amd64.tar.gz \
+    && tar -xvf piper.tar.gz -C /usr/local/bin/ \
+    && rm piper.tar.gz
 
-# پھر باقی لائبریریاں
+# 2. Download Urdu Model (High Quality) inside the image
+RUN mkdir -p /app/models \
+    && wget -O /app/models/ur_pk.onnx https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ur/ur_pk/ur_script/medium/ur_pk-ur_script-medium.onnx \
+    && wget -O /app/models/ur_pk.onnx.json https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ur/ur_pk/ur_script/medium/ur_pk-ur_script-medium.onnx.json
+
+# ✅ Python Libraries
 RUN pip3 install --no-cache-dir \
+    torch torchaudio --index-url https://download.pytorch.org/whl/cpu \
+    && pip3 install --no-cache-dir \
     fastapi uvicorn python-multipart requests \
-    faster-whisper edge-tts asyncio scipy
+    faster-whisper scipy
 
 WORKDIR /app
 
@@ -81,7 +90,6 @@ COPY ai_engine.py ./ai_engine.py
 RUN mkdir -p store logs
 ENV PORT=8080
 ENV NODE_ENV=production
-ENV U2NET_HOME=/app/store/.u2net 
 EXPOSE 8080
 
 CMD ["/app/bot"]

@@ -10,14 +10,14 @@ app = FastAPI()
 
 # Setup Paths
 TEMP_DIR = "/app/temp_ai"
+MODEL_PATH = "/app/models/ur_pk.onnx" # Dockerfile se aya hai
+PIPER_BIN = "/usr/local/bin/piper/piper" # Binary path
+
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-# Load Whisper
+# Load Whisper (Using your heavy CPU power)
 print("⏳ [PYTHON] Loading Whisper (Ears)...")
-stt_model = WhisperModel("large-v3", device="cuda" if torch.cuda.is_available() else "cpu", compute_type="float16" if torch.cuda.is_available() else "int8")
-
-# Voice Config
-VOICE_NAME = "ur-PK-SalmanNeural"
+stt_model = WhisperModel("large-v3", device="cpu", compute_type="int8")
 
 @app.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)):
@@ -25,7 +25,8 @@ async def transcribe(file: UploadFile = File(...)):
     with open(file_path, "wb") as buffer:
         buffer.write(await file.read())
     
-    segments, info = stt_model.transcribe(file_path, beam_size=5)
+    # CPU par 32 cores hain, beam_size barha do quality ke liye
+    segments, info = stt_model.transcribe(file_path, beam_size=8)
     text = "".join([segment.text for segment in segments])
     
     os.remove(file_path)
@@ -33,57 +34,36 @@ async def transcribe(file: UploadFile = File(...)):
 
 @app.post("/speak")
 async def speak(text: str = Form(...), lang: str = Form("ur")):
-    # Random filenames
     rand_id = os.urandom(4).hex()
-    raw_mp3_path = os.path.join(TEMP_DIR, f"raw_{rand_id}.mp3")
+    raw_wav_path = os.path.join(TEMP_DIR, f"raw_{rand_id}.wav")
     final_ogg_path = os.path.join(TEMP_DIR, f"out_{rand_id}.opus")
     
     try:
-        # 🟢 STEP 1: Generate Audio using Edge-TTS CLI (Most Reliable Method)
-        # یہ کمانڈ لائن کے ذریعے چلے گا جو کہ زیادہ مستحکم ہے
-        cmd_tts = [
-            "edge-tts",
-            "--voice", VOICE_NAME,
-            "--text", text,
-            "--write-media", raw_mp3_path
-        ]
+        # 🔥 STEP 1: Generate Audio using Local Piper
+        # Ye aapke 32 vCPUs ko use karega aur milliseconds mein audio banaye ga
+        cmd_piper = f'echo "{text}" | {PIPER_BIN} --model {MODEL_PATH} --output_file {raw_wav_path}'
         
-        # Run command and capture output for debugging
-        result = subprocess.run(cmd_tts, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            print(f"❌ Edge-TTS CLI Error: {result.stderr}")
-            return {"error": f"TTS Failed: {result.stderr}"}
+        # Shell=True isliye kyunke hum echo pipe kar rahe hain
+        subprocess.run(cmd_piper, shell=True, check=True)
 
-        # Check if file exists and has size
-        if not os.path.exists(raw_mp3_path) or os.path.getsize(raw_mp3_path) == 0:
-            print("❌ Error: Generated MP3 is empty or missing.")
-            return {"error": "Empty audio file generated"}
+        # Check file
+        if not os.path.exists(raw_wav_path) or os.path.getsize(raw_wav_path) == 0:
+            return {"error": "Piper generated empty file"}
 
-        # 🟢 STEP 2: Convert to WhatsApp OGG/Opus
+        # 🔥 STEP 2: Convert to WhatsApp OGG
         cmd_ffmpeg = [
             "ffmpeg", "-y",
-            "-i", raw_mp3_path,
-            "-vn", 
-            "-c:a", "libopus", 
-            "-b:a", "24k",  # Thora behtar bitrate
-            "-ac", "1", 
-            "-f", "ogg", 
+            "-i", raw_wav_path,
+            "-vn", "-c:a", "libopus", "-b:a", "24k", "-ac", "1", "-f", "ogg", 
             final_ogg_path
         ]
-        
         subprocess.run(cmd_ffmpeg, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     except Exception as e:
-        print(f"❌ Critical Exception: {e}")
+        print(f"❌ Piper Error: {e}")
         return {"error": str(e)}
     
-    # Cleanup MP3
-    if os.path.exists(raw_mp3_path): os.remove(raw_mp3_path)
-
-    # Final Check
-    if not os.path.exists(final_ogg_path):
-        return {"error": "Final conversion failed"}
+    if os.path.exists(raw_wav_path): os.remove(raw_wav_path)
 
     return FileResponse(final_ogg_path, media_type="audio/ogg")
 
