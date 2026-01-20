@@ -27,7 +27,7 @@ const USE_REMOTE_VOICE = true // ✅ TRUE = Use High Quality XTTS, FALSE = Local
 // 🚀 VOICE SERVERS LIST (Parallel Processing)
 // یہاں اپنے ریلوے کے 3 یا 4 پروجیکٹس کے لنکس ڈالیں
 var VoiceServers = []string{
-	"https://voice-1.up.railway.app/speak", // Project B (Instance 1)
+	"https://voice-real-production.up.railway.app/speak", // Project B (Instance 1)
 	// "https://voice-2.up.railway.app/speak", // Project C (Instance 2)
 	// "https://voice-3.up.railway.app/speak", // Project D (Instance 3)
 }
@@ -135,6 +135,21 @@ func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, s
 		os.Getenv("GOOGLE_API_KEY_3"),
 		os.Getenv("GOOGLE_API_KEY_4"),
 		os.Getenv("GOOGLE_API_KEY_5"),
+		os.Getenv("GOOGLE_API_KEY_6"),
+		os.Getenv("GOOGLE_API_KEY_7"),
+		os.Getenv("GOOGLE_API_KEY_9"),
+		os.Getenv("GOOGLE_API_KEY_10"),
+		os.Getenv("GOOGLE_API_KEY_11"),
+		os.Getenv("GOOGLE_API_KEY_12"),
+		os.Getenv("GOOGLE_API_KEY_13"),
+		os.Getenv("GOOGLE_API_KEY_14"),
+		os.Getenv("GOOGLE_API_KEY_15"),
+		os.Getenv("GOOGLE_API_KEY_16"),
+		os.Getenv("GOOGLE_API_KEY_17"),
+		os.Getenv("GOOGLE_API_KEY_18"),
+		os.Getenv("GOOGLE_API_KEY_19"),
+		os.Getenv("GOOGLE_API_KEY_20"),
+		
 	}
 
 	// خالی Keys نکال دیں
