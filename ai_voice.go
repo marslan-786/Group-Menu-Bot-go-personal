@@ -255,14 +255,24 @@ func GenerateVoice(text string) ([]byte, error) {
 	return audio, nil
 }
 
+// 🔌 Network Helper (Standard)
 func requestVoiceServer(url string, text string) ([]byte, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	writer.WriteField("text", text)
 	writer.Close()
 
-	client := http.Client{Timeout: 300 * time.Second}
-	resp, err := client.Post(url, writer.FormDataContentType(), body)
+	// 🔥 INCREASED TIMEOUT TO 10 MINUTES (600 Seconds)
+	// Ab yeh 'context deadline exceeded' error nahi dega
+	client := http.Client{Timeout: 6000 * time.Second}
+	
+	req, err := http.NewRequest("POST", url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
