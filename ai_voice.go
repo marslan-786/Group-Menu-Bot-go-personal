@@ -9,8 +9,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-	"regexp"
-	"sync"
 	"time"
 
 	"go.mau.fi/whatsmeow"
@@ -22,17 +20,14 @@ import (
 
 // ⚙️ SETTINGS
 const PY_SERVER = "http://localhost:5000"
-const USE_REMOTE_VOICE = true // ✅ TRUE = Use High Quality XTTS
 
-// 🚀 VOICE SERVERS LIST
-// آپ کا ریلوے کا پروجیکٹ لنک
-var VoiceServers = []string{
-	"https://voice-real-production.up.railway.app/speak", 
-}
+// 🚀 VOICE SERVER URL
+// چونکہ ہم اب ٹکڑے نہیں کر رہے، تو ایک ہی تگڑا سرور کافی ہے
+const REMOTE_VOICE_URL = "https://voice-real-production.up.railway.app/speak"
 
 // 🎤 MAIN HANDLER
 func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
-	fmt.Println("🚀 AI Engine: Starting Voice Processing...")
+	fmt.Println("🚀 AI Engine: Starting Voice Processing (Single Shot Mode)...")
 
 	audioMsg := v.Message.GetAudioMessage()
 	if audioMsg == nil {
@@ -41,11 +36,11 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 
 	senderID := v.Info.Sender.ToNonAD().String()
 
-	// ⏳ Typing/Recording Status
+	// ⏳ Typing/Recording Status (User ko busy rakhne ke liye)
 	stopRecording := make(chan bool)
 	go func() {
 		client.SendChatPresence(context.Background(), v.Info.Chat, types.ChatPresenceComposing, types.ChatPresenceMediaAudio)
-		ticker := time.NewTicker(4 * time.Second)
+		ticker := time.NewTicker(3 * time.Second) // Thora tez ticker
 		defer ticker.Stop()
 		for {
 			select {
@@ -83,23 +78,24 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 	if aiResponse == "" {
 		return
 	}
-	// لاگ میں دیکھنے کے لیے کہ اس نے ہندی میں کیا لکھا ہے
+	// لاگ میں ہندی سکرپٹ چیک کریں
 	fmt.Println("🤖 AI Generated (Script):", aiResponse)
 
-	// 4. Generate Voice
-	fmt.Println("🎙️ AI Engine: Generating Voice Reply...")
+	// 4. Generate Voice (FULL SENTENCE - NO CHUNKING)
+	fmt.Println("🎙️ AI Engine: Generating Full Voice Reply...")
 	audioBytes, err := GenerateVoice(aiResponse)
 
 	// ✅ SAFETY CHECK
 	if err != nil || len(audioBytes) == 0 {
-		fmt.Println("❌ TTS Failed (Empty File):", err)
+		fmt.Println("❌ TTS Failed (Empty File or Error):", err)
 		return
 	}
 
-	// 5. Send
-	fmt.Println("📤 AI Engine: Uploading Voice Note...")
+	// 5. Send Immediately
+	fmt.Printf("📤 AI Engine: Uploading Voice Note (%d bytes)...\n", len(audioBytes))
 	up, err := client.Upload(context.Background(), audioBytes, whatsmeow.MediaAudio)
 	if err != nil {
+		fmt.Println("❌ Upload Failed:", err)
 		return
 	}
 
@@ -108,17 +104,19 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 			URL:           PtrString(up.URL),
 			DirectPath:    PtrString(up.DirectPath),
 			MediaKey:      up.MediaKey,
-			Mimetype:      PtrString("audio/ogg; codecs=opus"),
+			Mimetype:      PtrString("audio/ogg; codecs=opus"), // WhatsApp Standard
 			FileSHA256:    up.FileSHA256,
 			FileEncSHA256: up.FileEncSHA256,
 			FileLength:    PtrUint64(uint64(len(audioBytes))),
-			PTT:           PtrBool(true),
+			PTT:           PtrBool(true), // Voice Note Flag
 		},
 	})
 
 	if err == nil && rdb != nil {
 		UpdateAIHistory(senderID, userText, aiResponse, resp.ID)
 		fmt.Println("✅ AI Engine: Reply Sent Successfully!")
+	} else {
+		fmt.Println("❌ Send Failed:", err)
 	}
 }
 
@@ -126,6 +124,7 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, string) {
 	ctx := context.Background()
 
+	// اپنی ساری کیز یہاں ڈال دیں
 	apiKeys := []string{
 		os.Getenv("GOOGLE_API_KEY"),
 		os.Getenv("GOOGLE_API_KEY_1"),
@@ -133,7 +132,12 @@ func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, s
 		os.Getenv("GOOGLE_API_KEY_3"),
 		os.Getenv("GOOGLE_API_KEY_4"),
 		os.Getenv("GOOGLE_API_KEY_5"),
-        // ... (Add all your keys here as before)
+		os.Getenv("GOOGLE_API_KEY_6"),
+		os.Getenv("GOOGLE_API_KEY_7"),
+		os.Getenv("GOOGLE_API_KEY_8"),
+		os.Getenv("GOOGLE_API_KEY_9"),
+		os.Getenv("GOOGLE_API_KEY_10"),
+		os.Getenv("GOOGLE_API_KEY_11"),
 	}
 
 	var validKeys []string
@@ -173,24 +177,16 @@ func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, s
 			history = history[len(history)-1500:]
 		}
 
-		// 🔥🔥🔥 CRITICAL PROMPT UPDATE 🔥🔥🔥
+		// 🔥 PROMPT UPDATED FOR HINDI SCRIPT + PURE URDU 🔥
 		systemPrompt := fmt.Sprintf(`System: You are a deeply caring, intimate friend.
 		
 		🔴 CRITICAL INSTRUCTIONS:
 		1. **SCRIPT:** Output ONLY in **HINDI SCRIPT (Devanagari)**. Do NOT use Urdu/Arabic script.
 		2. **LANGUAGE:** The actual language must be **PURE URDU**. 
-		   - Use 'Muhabbat' (not 'Prem').
-		   - Use 'Koshish' (not 'Prayas').
-		   - Use 'Zindagi' (not 'Jeevan').
-		3. **TONE & EMOTION:** - Detect the user's emotion immediately. If they are sad, be soft, slow, and comforting. If happy, be excited.
-		   - Speak naturally like a human friend. No robot vibes.
-		4. **PROHIBITED WORDS:** NEVER use 'Janab', 'Huzoor', 'Junoob', or formal bookish Urdu. Use casual 'Yaar', 'Jaan', 'Bhai'.
-		5. **FLOW:** Write in short, conversational sentences with natural pauses. Don't make it a speech.
-
-		Example:
-		User (Urdu): "Mera dil udaas hai."
-		You (Hindi Output): "अरे मेरी जान, क्या हुआ? उदास क्यों हो? मैं हूँ ना तुम्हारे साथ, मुझे बताओ क्या बात है।"
-
+		   - Use 'Muhabbat', 'Zindagi', 'Khayal', 'Pareshan'.
+		3. **TONE:** Detect emotion. If user is sad, be very soft and comforting. If happy, be cheerful.
+		4. **NO ROBOTIC SPEECH:** Speak fluently, like a real human. No formal headers.
+		
 		Chat History: %s
 		User Voice: "%s"`, history, query)
 
@@ -198,7 +194,6 @@ func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, s
 
 		if err != nil {
 			fmt.Printf("❌ Key #%d Failed: %v\n", i+1, err)
-			fmt.Println("🔄 Switching to Next Key...")
 			continue
 		}
 
@@ -206,99 +201,44 @@ func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, s
 		return resp.Text(), ""
 	}
 
-	fmt.Println("❌ ALL API KEYS FAILED!")
-	return "यार मेरा दिमाग अभी काम नहीं कर रहा, थोड़ी देर बाद बात करते हैं।", "" // Fallback in Hindi script
+	return "यार अभी मेरा नेट नहीं चल रहा।", ""
 }
 
-// 🔌 HELPER: Generate Voice
+// 🔌 HELPER: Generate Voice (DIRECT & FAST)
 func GenerateVoice(text string) ([]byte, error) {
+	fmt.Println("⚡ Sending Full Prompt to 32-Core Server...")
+	startTime := time.Now()
 
-	if USE_REMOTE_VOICE && len(VoiceServers) > 0 {
-		fmt.Println("⚡ Starting Parallel Voice Generation (XTTS)...")
-		startTime := time.Now()
-
-		re := regexp.MustCompile(`[۔.?!।]+`) // Added Hindi Purnviram (।)
-		rawParts := re.Split(text, -1)
-		var chunks []string
-		for _, s := range rawParts {
-			if len(s) > 2 {
-				chunks = append(chunks, s)
-			}
-		}
-		if len(chunks) == 0 {
-			chunks = []string{text}
-		}
-
-		fmt.Printf("📦 Splitting into %d chunks across %d servers...\n", len(chunks), len(VoiceServers))
-
-		var wg sync.WaitGroup
-		audioParts := make(map[int][]byte)
-		var mu sync.Mutex
-
-		for i, chunk := range chunks {
-			wg.Add(1)
-			serverIndex := i % len(VoiceServers)
-			serverURL := VoiceServers[serverIndex]
-
-			go func(idx int, txt string, url string) {
-				defer wg.Done()
-				fmt.Printf("🚀 Sending Chunk %d to %s...\n", idx, url)
-
-				audio, err := requestVoiceServer(url, txt)
-				if err == nil {
-					mu.Lock()
-					audioParts[idx] = audio
-					mu.Unlock()
-				} else {
-					fmt.Printf("❌ Chunk %d Failed: %v\n", idx, err)
-				}
-			}(i, chunk, serverURL)
-		}
-
-		wg.Wait()
-
-		var finalAudio []byte
-		for i := 0; i < len(chunks); i++ {
-			if part, ok := audioParts[i]; ok {
-				if i == 0 {
-					finalAudio = append(finalAudio, part...)
-				} else {
-					if len(part) > 44 {
-						finalAudio = append(finalAudio, part[44:]...)
-					}
-				}
-			}
-		}
-
-		fmt.Printf("🏁 Voice Generated in %v\n", time.Since(startTime))
-		return finalAudio, nil
-	}
-
-	// Local Fallback
-	fmt.Println("🏠 Generating Locally (gTTS Fallback)...")
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	writer.WriteField("text", text)
-	writer.WriteField("lang", "hi") // Local gTTS also supports Hindi
-	writer.Close()
-
-	resp, err := http.Post("http://localhost:5000/speak", writer.FormDataContentType(), body)
+	// ہم سیدھا ایک ہی ریکویسٹ بھیج رہے ہیں (No Chunking)
+	// 32 Cores اس کو سیکنڈوں میں ہینڈل کر لیں گے
+	audio, err := requestVoiceServer(REMOTE_VOICE_URL, text)
+	
 	if err != nil {
-		return nil, err
+		fmt.Println("❌ Remote Server Failed, trying Local...", err)
+		// Local Fallback (gTTS)
+		body := &bytes.Buffer{}
+		writer := multipart.NewWriter(body)
+		writer.WriteField("text", text)
+		writer.WriteField("lang", "hi") 
+		writer.Close()
+		resp, _ := http.Post("http://localhost:5000/speak", writer.FormDataContentType(), body)
+		defer resp.Body.Close()
+		return io.ReadAll(resp.Body)
 	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+
+	fmt.Printf("🏁 Full Voice Generated in %v\n", time.Since(startTime))
+	return audio, nil
 }
 
-// 🔌 Network Helper
+// 🔌 Network Helper (Standard)
 func requestVoiceServer(url string, text string) ([]byte, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	writer.WriteField("text", text)
 	writer.Close()
 
-	// High timeout for CPU generation
-	client := http.Client{Timeout: 600 * time.Second}
+	// ٹائم آؤٹ بڑھا دیا ہے تاکہ بڑی فائل بھی آ سکے
+	client := http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Post(url, writer.FormDataContentType(), body)
 	if err != nil {
 		return nil, err
