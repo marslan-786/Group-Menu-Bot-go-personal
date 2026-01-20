@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls" // ✅ یہ نیا امپورٹ ہے SSL کو ہینڈل کرنے کے لیے
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -49,9 +50,8 @@ type TCSResponse struct {
 // ---------------------------------------------------------
 // کمانڈ ہینڈلر (Command Handler)
 // ---------------------------------------------------------
-// نوٹ: یہاں ہم نے client اور v بھی منگوایا ہے تاکہ replyMessage یوز کر سکیں
 func HandleTCSCommand(client *whatsmeow.Client, v *events.Message, msgText string) {
-	// 1. میسج توڑیں (یہ موبائل کی اسپیس کو خود ہینڈل کرے گا)
+	// 1. میسج توڑیں
 	args := strings.Fields(msgText)
 
 	// Validation
@@ -65,13 +65,13 @@ func HandleTCSCommand(client *whatsmeow.Client, v *events.Message, msgText strin
 	trackingID := args[1]
 
 	// 3. API Call Logic
-	result, err := GetTCSData(trackingID) // <--- یہاں trackingID پاس ہو رہا ہے
+	result, err := GetTCSData(trackingID)
 	if err != nil {
-		replyMessage(client, v, "❌ *مسئلہ:* TCS ریکارڈ نہیں ملا یا نمبر غلط ہے۔\n"+err.Error())
+		replyMessage(client, v, "❌ *مسئلہ:* "+err.Error())
 		return
 	}
 
-	// 4. Success Response (commands.go والا فنکشن یوز ہو رہا ہے)
+	// 4. Success Response
 	replyMessage(client, v, result)
 }
 
@@ -109,7 +109,12 @@ func GetTCSData(trackingID string) (string, error) {
 	req.Header.Set("Origin", "https://www.tcsexpress.com")
 	req.Header.Set("Referer", "https://www.tcsexpress.com/track/"+trackingID)
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	// 🔥 FIX: SSL سرٹیفکیٹ کو نظر انداز کرنے کے لیے یہ سیٹنگ لگائیں
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	client := &http.Client{Transport: tr, Timeout: 15 * time.Second}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -126,7 +131,7 @@ func GetTCSData(trackingID string) (string, error) {
 
 	// Check Success
 	if !tcsResp.IsSuccess || len(tcsResp.ResponseData.ShipmentInfo) == 0 {
-		return "", fmt.Errorf("کوئی ریکارڈ نہیں ملا۔")
+		return "", fmt.Errorf("کوئی ریکارڈ نہیں ملا۔ ٹریکنگ نمبر چیک کریں۔")
 	}
 
 	// Beautify Output
