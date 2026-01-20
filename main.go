@@ -163,6 +163,7 @@ func main() {
 	loadGlobalSettings()
 	startPersistentUptimeTracker()
 	SetupFeatures()
+	KeepServerAlive()
 
 	// 🔥 START PYTHON ENGINE (BACKGROUND)
 	// یہ کوڈ بیک گراؤنڈ میں Python سرور کو چلائے گا

@@ -319,3 +319,15 @@ func UpdateAIHistory(senderID, userQuery, aiResponse, msgID string) {
 	jsonData, _ := json.Marshal(newSession)
 	rdb.Set(ctx, key, jsonData, 60*time.Minute)
 }
+
+// ⏰ SERVER WARMER (Keep-Alive)
+func KeepServerAlive() {
+    ticker := time.NewTicker(2 * time.Minute) // Har 2 minute baad ping karega
+    go func() {
+        for range ticker.C {
+            // Fake request to keep XTTS loaded in RAM
+            http.Get(PY_SERVER) 
+            fmt.Println("💓 Ping sent to Python Server to keep it warm!")
+        }
+    }()
+}
