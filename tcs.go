@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+    // "context" // اگر آپ اصلی SendMessage فنکشن کھولیں تو اسے ان-کمنٹ کریں
+    // "go.mau.fi/whatsmeow/proto/waE2E" // اگر پروٹوکول کی ضرورت ہو
 )
 
 // TCS API Request Structure
@@ -15,7 +17,7 @@ type TCSRequestBody struct {
 	Body struct {
 		URL     string            `json:"url"`
 		Type    string            `json:"type"`
-		Headers map[string]string `json:"headers"` // Special mapping logic needed here
+		Headers map[string]string `json:"headers"`
 		Payload struct{}          `json:"payload"`
 		Param   string            `json:"param"`
 	} `json:"body"`
@@ -32,7 +34,7 @@ type TCSResponse struct {
 			Consignee     string `json:"consignee"`
 			Origin        string `json:"origin"`
 			Destination   string `json:"destination"`
-			Status        string `json:"status"` // Sometimes status is here
+			Status        string `json:"status"`
 		} `json:"shipmentinfo"`
 		Checkpoints []struct {
 			Datetime   string `json:"datetime"`
@@ -43,101 +45,127 @@ type TCSResponse struct {
 	} `json:"responseData"`
 }
 
+// ---------------------------------------------------------
+// کمانڈ ہینڈلر (Command Handler)
+// ---------------------------------------------------------
 func HandleTCSCommand(chatID string, args []string) {
-    // 1. Validation: چیک کریں کہ ٹریکنگ نمبر موجود ہے
-    if len(args) < 2 {
-        response := "⚠️ *غلط طریقہ!*\n\nبرائے مہربانی ٹریکنگ نمبر ساتھ لکھیں۔\nمثال: `.tcs 306063207909`"
-        SendMessage(chatID, response) // یہ فنکشن آپ کے بوٹ کا میسج بھیجنے والا فنکشن ہوگا
-        return
-    }
+	// 1. Validation
+	if len(args) < 2 {
+		response := "⚠️ *غلط طریقہ!*\n\nبرائے مہربانی ٹریکنگ نمبر ساتھ لکھیں۔\nمثال: `.tcs 306063207909`"
+		SendMessage(chatID, response)
+		return
+	}
 
-    trackingID := args[1]
+	trackingID := args[1]
 
-    // 2. User Feedback: (آپشنل) اگر نیٹ سلو ہو تو یوزر کو بتا دیں
+	// 2. User Feedback (Optional)
     // SendMessage(chatID, "🔍 ڈیٹا چیک کیا جا رہا ہے...")
 
-    // 3. API Call Logic
-    result, err := GetTCSData(trackingID)
-    if err != nil {
-        SendMessage(chatID, "❌ *مسئلہ:* TCS سرور سے رابطہ نہیں ہو سکا یا نمبر غلط ہے۔\n" + err.Error())
-        return
-    }
+	// 3. API Call Logic
+	result, err := GetTCSData(trackingID)
+	if err != nil {
+		SendMessage(chatID, "❌ *مسئلہ:* TCS کا ریکارڈ نہیں ملا یا نمبر غلط ہے۔\n" + err.Error())
+		return
+	}
 
-    // 4. Success: جواب بھیج دیں
-    SendMessage(chatID, result)
+	// 4. Success Response
+	SendMessage(chatID, result)
 }
 
-// یہ صرف میسج بھیجنے کا ایک فرضی فنکشن ہے، آپ اپنا والا یوز کریں
-func SendMessage(jid, text string) {
-    // client.SendMessage(context.Background(), jid, &waProto.Message{Conversation: proto.String(text)})
-    fmt.Println("Sending to", jid, ":", text)
-}
-
-
+// ---------------------------------------------------------
+// TCS ڈیٹا حاصل کرنے والا فنکشن
+// ---------------------------------------------------------
 func GetTCSData(trackingID string) (string, error) {
-    url := "https://www.tcsexpress.com/apibridge"
+	url := "https://www.tcsexpress.com/apibridge"
 
-    // TCS Special Header Logic
-    headerMap := make(map[string]string)
-    for i, char := range trackingID {
-        headerMap[fmt.Sprintf("%d", i)] = string(char)
-    }
+	// TCS Special Header Logic (Breaking ID into index map)
+	headerMap := make(map[string]string)
+	for i, char := range trackingID {
+		headerMap[fmt.Sprintf("%d", i)] = string(char)
+	}
 
-    // Request Structure
-    reqBody := TCSRequestBody{} // (Struct اوپر والی فائل سے لیں)
-    reqBody.Body.URL = "trackapinew"
-    reqBody.Body.Type = "GET"
-    reqBody.Body.Headers = headerMap
-    reqBody.Body.Param = "consignee=" + trackingID
+	// Prepare Request Payload
+	reqBody := TCSRequestBody{}
+	reqBody.Body.URL = "trackapinew"
+	reqBody.Body.Type = "GET"
+	reqBody.Body.Headers = headerMap
+	reqBody.Body.Payload = struct{}{} // Empty JSON Object
+	reqBody.Body.Param = "consignee=" + trackingID
 
-    jsonBytes, _ := json.Marshal(reqBody)
+	jsonBytes, _ := json.Marshal(reqBody)
 
-    // HTTP Request
-    req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytes))
-    if err != nil {
-        return "", err
-    }
+	// Create Request
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		return "", err
+	}
 
-    req.Header.Set("Content-Type", "application/json; charset=UTF-8")
-    req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36")
-    req.Header.Set("Origin", "https://www.tcsexpress.com")
-    req.Header.Set("Referer", "https://www.tcsexpress.com/track/"+trackingID)
+	// Set Headers to mimic real browser
+	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36")
+	req.Header.Set("Origin", "https://www.tcsexpress.com")
+	req.Header.Set("Referer", "https://www.tcsexpress.com/track/"+trackingID)
 
-    client := &http.Client{Timeout: 10 * time.Second}
-    resp, err := client.Do(req)
-    if err != nil {
-        return "", err
-    }
-    defer resp.Body.Close()
+	// Execute Request
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
 
-    body, _ := ioutil.ReadAll(resp.Body)
+	body, _ := ioutil.ReadAll(resp.Body)
 
-    var tcsResp TCSResponse
-    if err := json.Unmarshal(body, &tcsResp); err != nil {
-        return "", err
-    }
+	// Parse Response
+	var tcsResp TCSResponse
+	if err := json.Unmarshal(body, &tcsResp); err != nil {
+		return "", fmt.Errorf("JSON پارسنگ ایرر")
+	}
 
-    if !tcsResp.IsSuccess || len(tcsResp.ResponseData.ShipmentInfo) == 0 {
-        return "", fmt.Errorf("کوئی ریکارڈ نہیں ملا")
-    }
+	// Check Success
+	if !tcsResp.IsSuccess || len(tcsResp.ResponseData.ShipmentInfo) == 0 {
+		return "", fmt.Errorf("کوئی ریکارڈ نہیں ملا۔ ٹریکنگ نمبر چیک کریں۔")
+	}
 
-    // Beautify String
-    info := tcsResp.ResponseData.ShipmentInfo[0]
-    var sb strings.Builder
-    sb.WriteString("🚚 *TCS Tracking Details*\n")
-    sb.WriteString("━━━━━━━━━━━━━━━━\n")
-    sb.WriteString(fmt.Sprintf("📦 *CN:* `%s`\n", info.ConsignmentNo))
-    sb.WriteString(fmt.Sprintf("📅 *Date:* %s\n", info.BookingDate))
-    sb.WriteString(fmt.Sprintf("📍 *Route:* %s ➡️ %s\n", info.Origin, info.Destination))
-    sb.WriteString(fmt.Sprintf("👤 *Sender:* %s\n", info.Shipper))
-    sb.WriteString(fmt.Sprintf("🏠 *Receiver:* %s\n", info.Consignee))
-    sb.WriteString("━━━━━━━━━━━━━━━━\n")
+	// Beautify Output
+	info := tcsResp.ResponseData.ShipmentInfo[0]
+	var sb strings.Builder
+	
+	sb.WriteString("🚚 *TCS Tracking Details*\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━\n")
+	sb.WriteString(fmt.Sprintf("📦 *CN:* `%s`\n", info.ConsignmentNo))
+	sb.WriteString(fmt.Sprintf("📅 *Date:* %s\n", info.BookingDate))
+	sb.WriteString(fmt.Sprintf("📍 *Route:* %s ➡️ %s\n", info.Origin, info.Destination))
+	sb.WriteString(fmt.Sprintf("👤 *Sender:* %s\n", info.Shipper))
+	sb.WriteString(fmt.Sprintf("🏠 *Receiver:* %s\n", info.Consignee))
+	sb.WriteString("━━━━━━━━━━━━━━━━\n")
+	
+	// Checkpoints Loop
+	sb.WriteString("*🔄 Tracking History:*\n")
+	if len(tcsResp.ResponseData.Checkpoints) > 0 {
+		for _, cp := range tcsResp.ResponseData.Checkpoints {
+			sb.WriteString(fmt.Sprintf("🔹 %s\n   🕒 %s | 📍 %s\n", cp.Status, cp.Datetime, cp.RecievedBy))
+		}
+	} else {
+		sb.WriteString("   (مزید تفصیلات دستیاب نہیں)\n")
+	}
+	
+	// Summary
+    // sb.WriteString(fmt.Sprintf("\n📝 %s", tcsResp.ResponseData.ShipmentSummary))
+
+	return sb.String(), nil
+}
+
+// ---------------------------------------------------------
+// میسج بھیجنے والا فنکشن (اپنا والا کوڈ یہاں لگائیں)
+// ---------------------------------------------------------
+func SendMessage(jid, text string) {
+    // ⚠️ نوٹ: یہاں آپ اپنے واٹس ایپ لائبریری کا کوڈ ان-کمنٹ کریں
+    // مثال کے طور پر:
     
-    // Checkpoints
-    sb.WriteString("*🔄 History:*\n")
-    for _, cp := range tcsResp.ResponseData.Checkpoints {
-        sb.WriteString(fmt.Sprintf("🔹 %s\n   🕒 %s | 📍 %s\n", cp.Status, cp.Datetime, cp.RecievedBy))
-    }
-    
-    return sb.String(), nil
+    // globalClient.SendMessage(context.Background(), jid, &waProto.Message{
+    //     Conversation: proto.String(text),
+    // })
+
+    fmt.Println("Bot Reply to", jid, ":", text)
 }
