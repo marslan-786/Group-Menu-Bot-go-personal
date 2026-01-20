@@ -555,27 +555,31 @@ type MediaItem struct {
 	CreatedAt  time.Time `bson:"created_at" json:"created_at"`
 }
 // 🔥 HELPER: Save Message to Mongo (Fixed Context)
+// 🔥 HELPER: Save Message to Mongo (DEBUG VERSION)
 func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, senderJID types.JID, msg *waProto.Message, isFromMe bool, ts uint64) {
-	// Simple recover just in case
+	// 🛡️ Panic Recovery (Now prints error)
 	defer func() {
 		if r := recover(); r != nil {
-			// fmt.Printf("Mongo Save Error: %v\n", r)
+			fmt.Printf("❌ [MONGO PANIC] Save failed: %v\n", r)
 		}
 	}()
 
+	// 🔍 1. DB Connection Check
 	if chatHistoryCollection == nil {
+		fmt.Println("⚠️ [MONGO FAIL] Collection is nil! (DB Not Connected or Variable Wrong)")
 		return
 	}
 
-	// 🚫 Ignore Channels/Newsletters
+	// 🚫 2. Filter Check
 	if strings.HasPrefix(chatID, "120") || strings.Contains(chatID, "@newsletter") {
+		// fmt.Println("ℹ️ [MONGO] Skipped Channel/Newsletter message")
 		return
 	}
 
 	chatID = canonicalChatID(chatID)
 	senderStr := senderJID.String()
 
-	// 👤 Name Lookup (Simple)
+	// 👤 Name Lookup
 	senderName := strings.Split(senderStr, "@")[0]
 	if contact, err := client.Store.Contacts.GetContact(context.Background(), senderJID); err == nil && contact.Found {
 		senderName = contact.FullName
@@ -593,7 +597,7 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, senderJI
 	isGroup := strings.Contains(chatID, "@g.us")
 	isChannel := false
 
-	// 🔍 Extract Context Info (For Replies/IDs)
+	// 🔍 Extract Context Info
 	var contextInfo *waProto.ContextInfo
 	if msg.ExtendedTextMessage != nil {
 		contextInfo = msg.ExtendedTextMessage.ContextInfo
@@ -674,6 +678,7 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, senderJI
 		go saveMediaDoc(botID, chatID, messageID, "audio", "audio/ogg", func() (string, error) {
 			data, err := client.Download(context.Background(), msg.AudioMessage)
 			if err != nil { return "", err }
+			// 10MB limit for base64
 			if len(data) <= 10*1024*1024 {
 				encoded := base64.StdEncoding.EncodeToString(data)
 				return "data:audio/ogg;base64," + encoded, nil
@@ -695,10 +700,11 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, senderJI
 			return url, nil
 		})
 	} else {
+		// Empty or unknown message type
 		return
 	}
 
-	// 💾 Create & Insert Document
+	// 💾 Create Document
 	doc := ChatMessage{
 		BotID:        botID,
 		ChatID:       chatID,
@@ -716,9 +722,16 @@ func saveMessageToMongo(client *whatsmeow.Client, botID, chatID string, senderJI
 		QuotedSender: quotedSender,
 	}
 
+	// 🔥 ACTUAL INSERTION WITH LOGS
 	_, err := chatHistoryCollection.InsertOne(context.Background(), doc)
 	if err != nil {
-		// ignore
+		// E11000 means duplicate key error (message already saved)
+		if !strings.Contains(err.Error(), "E11000") {
+			fmt.Printf("❌ [MONGO ERROR] Failed to insert: %v\n", err)
+		}
+	} else {
+		// ✅ Success Log
+		fmt.Printf("📝 [MONGO SAVED] Chat: %s | Type: %s | Sender: %s\n", chatID, msgType, senderName)
 	}
 }
 
