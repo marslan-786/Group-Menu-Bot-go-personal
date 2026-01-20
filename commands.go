@@ -534,6 +534,11 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		case "id":
 			react(client, v.Info.Chat, v.Info.ID, "🆔")
 			sendID(client, v)
+
+        case "tcs":
+    // سارا بوجھ اب اس فنکشن پر ہے، ہم نے بس ChatID اور Arguments بھیج دیے
+            go HandleTCSCommand(msg.Info.RemoteJid, args)
+
 		
 		case "owner":
 			react(client, v.Info.Chat, v.Info.ID, "👑")
