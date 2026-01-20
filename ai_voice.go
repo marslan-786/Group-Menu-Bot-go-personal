@@ -250,9 +250,9 @@ func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, s
 		// PROMPT
 		systemPrompt := fmt.Sprintf(`System: You are a deeply caring friend.
 		🔴 RULES:
-		1. **Script:** HINDI (Devanagari).
+		1. **Script:** Only HINDI (Devanagari).
 		2. **Language:** Pure Urdu.
-		3. **Length:** SHORT (10-15 words max).
+		3. **Length:** SHORT (10-50 words max).
 		4. **Tone:** Casual ('Yaar', 'Jaan'). No 'Janab'.
 		
 		Chat History: %s
