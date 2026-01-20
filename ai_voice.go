@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"time"
 
 	"go.mau.fi/whatsmeow"
@@ -16,6 +17,7 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/genai"
+	"google.golang.org/protobuf/proto" // ✅ Fix for proto functions
 )
 
 // ⚙️ SETTINGS
@@ -33,11 +35,10 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 
 	senderID := v.Info.Sender.ToNonAD().String()
 
-	// 1. Check Reply Context (اگلے بندے نے کس بات پر جواب دیا؟)
+	// 1. Check Reply Context
 	replyContext := ""
 	quoted := v.Message.GetExtendedTextMessage().GetContextInfo().GetQuotedMessage()
 	if quoted != nil {
-		// اگر ٹیکسٹ پر ریپلائی ہے
 		if conversation := quoted.GetConversation(); conversation != "" {
 			replyContext = conversation
 		} else if imageMsg := quoted.GetImageMessage(); imageMsg != nil {
@@ -45,9 +46,8 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 		} else if videoMsg := quoted.GetVideoMessage(); videoMsg != nil {
 			replyContext = videoMsg.GetCaption()
 		}
-		// اگر وہ وائس نوٹ پر ریپلائی ہے تو ہم آڈیو نہیں سن سکتے، لیکن ہم اسے بتا دیں گے
 		if quoted.GetAudioMessage() != nil {
-			replyContext = "[User replied to a previous Voice Note]"
+			replyContext = "[User replied to a Voice Note]"
 		}
 	}
 
@@ -70,11 +70,10 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 
 	if replyContext != "" {
 		fmt.Println("🔗 Reply Context Found:", replyContext)
-		// یوزر کا میسج موڈیفائی کر دیں تاکہ سیاق و سباق شامل ہو جائے
 		userText = fmt.Sprintf("(In reply to: '%s') %s", replyContext, userText)
 	}
 
-	// 4. Gemini Brain
+	// 4. Gemini Brain (Short & Natural)
 	aiResponse, _ := GetGeminiVoiceResponseWithHistory(userText, senderID)
 	if aiResponse == "" {
 		return
@@ -82,27 +81,35 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 	fmt.Println("🤖 AI Response:", aiResponse)
 
 	// 5. Generate Voice
-	audioBytes, err := GenerateVoice(aiResponse)
-	if err != nil || len(audioBytes) == 0 {
+	rawAudio, err := GenerateVoice(aiResponse)
+	if err != nil || len(rawAudio) == 0 {
 		return
 	}
 
-	// 6. Upload & Send (Correct OGG MimeType)
-	up, err := client.Upload(context.Background(), audioBytes, whatsmeow.MediaAudio)
+	// 6. Convert to OGG Opus (Locally in Go using FFmpeg)
+	fmt.Println("🎵 Converting to WhatsApp PTT Format...")
+	finalAudio, err := ConvertToOpus(rawAudio)
+	if err != nil {
+		fmt.Println("❌ FFmpeg Failed, sending raw:", err)
+		finalAudio = rawAudio // Fallback
+	}
+
+	// 7. Upload & Send
+	up, err := client.Upload(context.Background(), finalAudio, whatsmeow.MediaAudio)
 	if err != nil {
 		return
 	}
 
 	_, err = client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		AudioMessage: &waProto.AudioMessage{
-			URL:           PtrString(up.URL),
-			DirectPath:    PtrString(up.DirectPath),
+			URL:           proto.String(up.URL),
+			DirectPath:    proto.String(up.DirectPath),
 			MediaKey:      up.MediaKey,
-			Mimetype:      PtrString("audio/ogg; codecs=opus"), // ✅ Now actually correct!
+			Mimetype:      proto.String("audio/ogg; codecs=opus"), // ✅ Correct MIME
 			FileSHA256:    up.FileSHA256,
 			FileEncSHA256: up.FileEncSHA256,
-			FileLength:    PtrUint64(uint64(len(audioBytes))),
-			PTT:           PtrBool(true), // ✅ Shows as blue waveform
+			FileLength:    proto.Uint64(uint64(len(finalAudio))),
+			PTT:           proto.Bool(true), // ✅ Blue Mic
 		},
 	})
 
@@ -112,25 +119,45 @@ func HandleVoiceMessage(client *whatsmeow.Client, v *events.Message) {
 	}
 }
 
-// ... (Baqi Gemini, Transcribe, UpdateHistory functions same as before) ...
-// (صرف GetGeminiVoiceResponseWithHistory اور GenerateVoice وہی رہیں گے جو پچھلی بار دیے تھے)
-// (GenerateVoice فنکشن میں بس یہ دھیان رہے کہ وہ اب Python server کے نئے /speak اینڈ پوائنٹ کو ہٹ کرے گا)
+// 🎵 FFmpeg Converter (Go Side)
+func ConvertToOpus(inputData []byte) ([]byte, error) {
+	// Temp files
+	inputFile := fmt.Sprintf("temp_in_%d.wav", time.Now().UnixNano())
+	outputFile := fmt.Sprintf("temp_out_%d.ogg", time.Now().UnixNano())
 
-// 🧠 GEMINI LOGIC (Modified for Hindi Script / Pure Urdu)
+	// Write Input
+	err := os.WriteFile(inputFile, inputData, 0644)
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(inputFile)
+	defer os.Remove(outputFile)
+
+	// FFmpeg Command (WhatsApp Optimized)
+	cmd := exec.Command("ffmpeg", "-y", "-i", inputFile, "-c:a", "libopus", "-b:a", "16k", "-ac", "1", "-f", "ogg", outputFile)
+	
+	// Hide Output
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	err = cmd.Run()
+	if err != nil {
+		return nil, err
+	}
+
+	// Read Output
+	return os.ReadFile(outputFile)
+}
+
+// 🧠 GEMINI LOGIC (Short & Human-Like)
 func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, string) {
 	ctx := context.Background()
 
-	// 🔥 DYNAMIC KEY LOADER (Auto-Discovery)
-	// اب ہارڈ کوڈنگ کی ضرورت نہیں، یہ خود 1 سے 50 تک چیک کر لے گا
+	// Dynamic API Keys
 	var validKeys []string
-
-	// 1. سب سے پہلے مین کی (Base Key) چیک کریں
 	if mainKey := os.Getenv("GOOGLE_API_KEY"); mainKey != "" {
 		validKeys = append(validKeys, mainKey)
 	}
-
-	// 2. اب لوپ لگا کر _1 سے _50 تک چیک کریں
-	// اگر آپ نے بیچ میں کوئی نمبر چھوڑ بھی دیا (مثلاً 4 کے بعد سیدھا 10)، تو بھی یہ اسے ڈھونڈ لے گا
 	for i := 1; i <= 50; i++ {
 		keyName := fmt.Sprintf("GOOGLE_API_KEY_%d", i)
 		if keyVal := os.Getenv(keyName); keyVal != "" {
@@ -138,15 +165,10 @@ func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, s
 		}
 	}
 
-	// 🛑 اگر کوئی بھی Key نہیں ملی
 	if len(validKeys) == 0 {
-		fmt.Println("❌ Error: No GOOGLE_API_KEY found in environment variables!")
 		return "سسٹم میں کوئی API Key موجود نہیں ہے۔", ""
 	}
 
-	fmt.Printf("ℹ️ Loaded %d API Keys for Rotation.\n", len(validKeys))
-
-	// 🔄 RETRY LOOP (Keys Rotation)
 	for i := 0; i < len(validKeys); i++ {
 		currentKey := validKeys[i]
 		fmt.Printf("🔑 AI Engine: Trying API Key #%d...\n", i+1)
@@ -169,29 +191,37 @@ func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, s
 				}
 			}
 		}
-		if len(history) > 1500 {
-			history = history[len(history)-1500:]
+		if len(history) > 1000 { // Keep history short too
+			history = history[len(history)-1000:]
 		}
 
-		// 🔥 PROMPT (Hindi Script / Pure Urdu)
+		// 🔥🔥🔥 CRITICAL PROMPT: SHORT & HUMAN 🔥🔥🔥
 		systemPrompt := fmt.Sprintf(`System: You are a deeply caring, intimate friend.
 		
-		🔴 CRITICAL INSTRUCTIONS:
-		1. **SCRIPT:** Output ONLY in **HINDI SCRIPT (Devanagari)**. Do NOT use Urdu/Arabic script.
-		2. **LANGUAGE:** The actual language must be **PURE URDU**. 
-		   - Use 'Muhabbat', 'Zindagi', 'Khayal', 'Pareshan'.
-		3. **TONE:** Detect emotion. If user is sad, be very soft and comforting. If happy, be cheerful.
-		4. **NO ROBOTIC SPEECH:** Speak fluently, like a real human. No formal headers.
-		
+		🔴 CRITICAL RULES:
+		1. **SCRIPT:** Output ONLY in **HINDI SCRIPT (Devanagari)**.
+		2. **LANGUAGE:** Actual language must be **PURE URDU**. 
+		3. **LENGTH (SUPER IMPORTANT):** Keep responses **EXTREMELY SHORT** (10-15 words max).
+		   - Act like a real human on chat. Don't write essays.
+		   - Just answer directly. No filler words.
+		4. **TONE:** Casual, Friendly, Emotional.
+		   - Use 'Yaar', 'Jaan'. No 'Janab'.
+		   
+		Example 1:
+		User: "Kya haal hai?"
+		You: "मैं ठीक हूँ यार, तुम सुनाओ?" (Short & Sweet)
+
+		Example 2:
+		User: "Dil udaas hai."
+		You: "अरे क्या हुआ मेरी जान? मुझे बताओ ना।" (Direct & Caring)
+
 		Chat History: %s
 		User Voice: "%s"`, history, query)
 
 		resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash", genai.Text(systemPrompt), nil)
 
 		if err != nil {
-			// اگر ایرر آئے تو اگلی Key ٹرائی کریں
 			fmt.Printf("❌ Key #%d Failed: %v\n", i+1, err)
-			fmt.Println("🔄 Switching to Next Key...")
 			continue
 		}
 
@@ -199,22 +229,18 @@ func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, s
 		return resp.Text(), ""
 	}
 
-	fmt.Println("❌ ALL API KEYS FAILED!")
-	return "यार अभी मेरा नेट नहीं चल रहा।", ""
+	return "यार नेट नहीं चल रहा।", ""
 }
 
-// 🔌 HELPER: Generate Voice (DIRECT & FAST)
+// 🔌 HELPER: Generate Voice
 func GenerateVoice(text string) ([]byte, error) {
-	fmt.Println("⚡ Sending Full Prompt to 32-Core Server...")
+	fmt.Println("⚡ Sending Prompt to 32-Core Server...")
 	startTime := time.Now()
 
-	// ہم سیدھا ایک ہی ریکویسٹ بھیج رہے ہیں (No Chunking)
-	// 32 Cores اس کو سیکنڈوں میں ہینڈل کر لیں گے
 	audio, err := requestVoiceServer(REMOTE_VOICE_URL, text)
 	
 	if err != nil {
 		fmt.Println("❌ Remote Server Failed, trying Local...", err)
-		// Local Fallback (gTTS)
 		body := &bytes.Buffer{}
 		writer := multipart.NewWriter(body)
 		writer.WriteField("text", text)
@@ -225,18 +251,16 @@ func GenerateVoice(text string) ([]byte, error) {
 		return io.ReadAll(resp.Body)
 	}
 
-	fmt.Printf("🏁 Full Voice Generated in %v\n", time.Since(startTime))
+	fmt.Printf("🏁 Voice Generated in %v\n", time.Since(startTime))
 	return audio, nil
 }
 
-// 🔌 Network Helper (Standard)
 func requestVoiceServer(url string, text string) ([]byte, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	writer.WriteField("text", text)
 	writer.Close()
 
-	// ٹائم آؤٹ بڑھا دیا ہے تاکہ بڑی فائل بھی آ سکے
 	client := http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Post(url, writer.FormDataContentType(), body)
 	if err != nil {
@@ -285,7 +309,3 @@ func UpdateAIHistory(senderID, userQuery, aiResponse, msgID string) {
 	jsonData, _ := json.Marshal(newSession)
 	rdb.Set(ctx, key, jsonData, 60*time.Minute)
 }
-
-func PtrString(s string) *string { return &s }
-func PtrBool(b bool) *bool       { return &b }
-func PtrUint64(i uint64) *uint64 { return &i }
