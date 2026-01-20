@@ -536,8 +536,10 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			sendID(client, v)
 
         case "tcs":
-    // اب ہم args نہیں، بلکہ پورا msgText بھیج رہے ہیں
-            go HandleTCSCommand(v.Info.Chat.String(), msgText)
+			react(client, v.Info.Chat, v.Info.ID, "🚚")
+			// یہاں ہم 'bodyClean' بھیج رہے ہیں کیونکہ یہی اصل میسج ہے
+			go HandleTCSCommand(client, v, bodyClean)
+
 
 
 		
