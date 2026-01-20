@@ -1218,194 +1218,188 @@ type ChatItemV2 struct {
 }
 
 func handleGetChats(w http.ResponseWriter, r *http.Request) {
-	if chatHistoryCollection == nil {
-		http.Error(w, "MongoDB not connected", http.StatusInternalServerError)
-		return
-	}
+    // 🔥 CORS (تاکہ ویب سائٹ بلاک نہ کرے)
+    w.Header().Set("Access-Control-Allow-Origin", "*")
+    w.Header().Set("Content-Type", "application/json")
 
-	botID := r.URL.Query().Get("bot_id")
-	if botID == "" {
-		http.Error(w, "bot_id required", http.StatusBadRequest)
-		return
-	}
+    if chatHistoryCollection == nil {
+        http.Error(w, "MongoDB not connected", http.StatusInternalServerError)
+        fmt.Println("❌ [API ERROR] Mongo collection is nil")
+        return
+    }
 
-	// Aggregate chats from messages (latest activity + last sender_name)
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	defer cancel()
+    botID := r.URL.Query().Get("bot_id")
+    if botID == "" {
+        http.Error(w, "bot_id required", http.StatusBadRequest)
+        return
+    }
 
-	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{
-			"bot_id":  botID,
-			"chat_id": bson.M{"$ne": ""},
-		}}},
-		{{Key: "$sort", Value: bson.D{{Key: "timestamp", Value: 1}}}}, // asc so $last works
-		{{Key: "$group", Value: bson.M{
-			"_id":     "$chat_id",
-			"last_ts": bson.M{"$last": "$timestamp"},
-			"name":    bson.M{"$last": "$sender_name"},
-		}}},
-		{{Key: "$sort", Value: bson.D{{Key: "last_ts", Value: -1}}}},
-		{{Key: "$limit", Value: 5000}},
-	}
+    fmt.Printf("🔍 [API REQUEST] GetChats for Bot: %s\n", botID)
 
-	cur, err := chatHistoryCollection.Aggregate(ctx, pipeline)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer cur.Close(ctx)
+    // Aggregate chats from messages
+    ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+    defer cancel()
 
-	type row struct {
-		ChatID string    `bson:"_id"`
-		LastTS time.Time `bson:"last_ts"`
-		Name   string    `bson:"name"`
-	}
+    // 🛠️ Debug: چیک کریں کہ اس بوٹ کی کوئی چیٹ ہے بھی یا نہیں
+    count, _ := chatHistoryCollection.CountDocuments(ctx, bson.M{"bot_id": botID})
+    fmt.Printf("📊 [DB CHECK] Found %d total documents for bot_id: %s\n", count, botID)
 
-	// Merge LID + JID into one canonical chat id
-	type agg struct {
-		ChatID string
-		Name   string
-		LastTS time.Time
-	}
+    pipeline := mongo.Pipeline{
+        {{Key: "$match", Value: bson.M{
+            "bot_id":  botID,
+            "chat_id": bson.M{"$ne": ""},
+        }}},
+        {{Key: "$sort", Value: bson.D{{Key: "timestamp", Value: 1}}}},
+        {{Key: "$group", Value: bson.M{
+            "_id":     "$chat_id",
+            "last_ts": bson.M{"$last": "$timestamp"},
+            "name":    bson.M{"$last": "$sender_name"},
+        }}},
+        {{Key: "$sort", Value: bson.D{{Key: "last_ts", Value: -1}}}},
+        {{Key: "$limit", Value: 5000}},
+    }
 
-	merged := make(map[string]*agg)
+    cur, err := chatHistoryCollection.Aggregate(ctx, pipeline)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        fmt.Printf("❌ [API ERROR] Aggregate failed: %v\n", err)
+        return
+    }
+    defer cur.Close(ctx)
 
-	for cur.Next(ctx) {
-		var it row
-		if err := cur.Decode(&it); err != nil {
-			continue
-		}
+    // ... (باقی لاجک وہی ہے، صرف ڈیبگنگ شامل کی ہے) ...
+    type row struct {
+        ChatID string    `bson:"_id"`
+        LastTS time.Time `bson:"last_ts"`
+        Name   string    `bson:"name"`
+    }
 
-		origID := strings.TrimSpace(it.ChatID)
-		if origID == "" {
-			continue
-		}
+    type agg struct {
+        ChatID string
+        Name   string
+        LastTS time.Time
+    }
 
-		canon := canonicalChatID(origID)
+    merged := make(map[string]*agg)
 
-		// pick best display name
-		name := strings.TrimSpace(it.Name)
-		if name == "" {
-			// fallback to number part
-			left := canon
-			if strings.Contains(left, "@") {
-				left = strings.Split(left, "@")[0]
-			}
-			if strings.Contains(left, ":") {
-				left = strings.Split(left, ":")[0]
-			}
-			name = left
-		}
+    for cur.Next(ctx) {
+        var it row
+        if err := cur.Decode(&it); err != nil {
+            continue
+        }
+        origID := strings.TrimSpace(it.ChatID)
+        if origID == "" { continue }
+        canon := canonicalChatID(origID)
+        name := strings.TrimSpace(it.Name)
+        if name == "" {
+            left := canon
+            if strings.Contains(left, "@") { left = strings.Split(left, "@")[0] }
+            if strings.Contains(left, ":") { left = strings.Split(left, ":")[0] }
+            name = left
+        }
 
-		// If already exists, keep the newest timestamp
-		ex, ok := merged[canon]
-		if !ok {
-			merged[canon] = &agg{
-				ChatID: canon,
-				Name:   name,
-				LastTS: it.LastTS,
-			}
-			continue
-		}
+        ex, ok := merged[canon]
+        if !ok {
+            merged[canon] = &agg{ChatID: canon, Name: name, LastTS: it.LastTS}
+            continue
+        }
+        if it.LastTS.After(ex.LastTS) { ex.LastTS = it.LastTS }
+        if ex.Name == "" || ex.Name == strings.Split(ex.ChatID, "@")[0] { ex.Name = name }
+    }
 
-		// prefer newer ts
-		if it.LastTS.After(ex.LastTS) {
-			ex.LastTS = it.LastTS
-		}
+    out := make([]ChatItem, 0, len(merged))
+    for _, v := range merged {
+        t := "user"
+        if strings.Contains(v.ChatID, "@g.us") { t = "group" }
+        out = append(out, ChatItem{ID: v.ChatID, Name: v.Name, Type: t})
+    }
 
-		// prefer "better" name (non-empty and not just number)
-		if ex.Name == "" || ex.Name == strings.Split(ex.ChatID, "@")[0] {
-			ex.Name = name
-		}
-	}
+    sort.Slice(out, func(i, j int) bool {
+        return merged[out[i].ID].LastTS.After(merged[out[j].ID].LastTS)
+    })
 
-	// Build response list
-	out := make([]ChatItem, 0, len(merged))
-	for _, v := range merged {
-		t := "user"
-		if strings.Contains(v.ChatID, "@g.us") {
-			t = "group"
-		}
-		// (optional) skip status chat record if it appears as normal chat
-		// if strings.Contains(v.ChatID, "status@broadcast") { continue }
-
-		out = append(out, ChatItem{
-			ID:   v.ChatID,
-			Name: v.Name,
-			Type: t,
-		})
-	}
-
-	// sort again by last activity desc (because map order is random)
-	sort.Slice(out, func(i, j int) bool {
-		// re-fetch timestamps from merged map
-		return merged[out[i].ID].LastTS.After(merged[out[j].ID].LastTS)
-	})
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+    fmt.Printf("✅ [API SUCCESS] Returning %d chats for Bot: %s\n", len(out), botID)
+    _ = json.NewEncoder(w).Encode(out)
 }
 
 // 4. Get Messages (FULL DATA LOAD - NO WAITING)
 func handleGetMessages(w http.ResponseWriter, r *http.Request) {
-	if chatHistoryCollection == nil {
-		http.Error(w, "MongoDB not connected", 500)
-		return
-	}
+    // 🔥 CORS Headers
+    w.Header().Set("Access-Control-Allow-Origin", "*")
+    w.Header().Set("Content-Type", "application/json")
 
-	botID := r.URL.Query().Get("bot_id")
-	chatID := r.URL.Query().Get("chat_id")
-	if botID == "" || chatID == "" {
-		http.Error(w, "bot_id and chat_id required", 400)
-		return
-	}
+    if chatHistoryCollection == nil {
+        http.Error(w, "MongoDB not connected", 500)
+        return
+    }
 
-	limit := int64(200)
-	if s := r.URL.Query().Get("limit"); s != "" {
-		if n, err := strconv.ParseInt(s, 10, 64); err == nil && n > 0 && n <= 500 {
-			limit = n
-		}
-	}
+    botID := r.URL.Query().Get("bot_id")
+    chatID := r.URL.Query().Get("chat_id")
+    
+    // 🔍 DEBUG LOG
+    fmt.Printf("🔍 [MSG API] Request -> Bot: '%s' | Chat: '%s'\n", botID, chatID)
 
-	// ✅ very important: accept both ids
-	canon := canonicalChatID(chatID)
-	ids := []string{chatID}
-	if canon != "" && canon != chatID {
-		ids = append(ids, canon)
-	}
+    if botID == "" || chatID == "" {
+        http.Error(w, "bot_id and chat_id required", 400)
+        return
+    }
 
-	filter := bson.M{
-		"bot_id":  botID,
-		"chat_id": bson.M{"$in": ids},
-	}
+    limit := int64(200)
+    if s := r.URL.Query().Get("limit"); s != "" {
+        if n, err := strconv.ParseInt(s, 10, 64); err == nil && n > 0 && n <= 500 {
+            limit = n
+        }
+    }
 
-	// ✅ fetch last N (DESC), then reverse to ASC for UI
-	opts := options.Find().
-		SetSort(bson.D{{Key: "timestamp", Value: -1}}).
-		SetLimit(limit)
+    // ✅ IDs کو میچ کروانے کی کوشش
+    canon := canonicalChatID(chatID)
+    ids := []string{chatID}
+    if canon != "" && canon != chatID {
+        ids = append(ids, canon)
+    }
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
+    // فلٹر بنائیں
+    filter := bson.M{
+        "bot_id":  botID,
+        "chat_id": bson.M{"$in": ids},
+    }
 
-	cursor, err := chatHistoryCollection.Find(ctx, filter, opts)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
+    // 🔍 Query کرنے سے پہلے لاگ
+    // fmt.Printf("🕵️ [MONGO QUERY] Filter: %+v\n", filter)
 
-	var messages []ChatMessage
-	if err = cursor.All(ctx, &messages); err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
+    opts := options.Find().
+        SetSort(bson.D{{Key: "timestamp", Value: -1}}).
+        SetLimit(limit)
 
-	// reverse to old->new
-	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
-		messages[i], messages[j] = messages[j], messages[i]
-	}
+    ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+    defer cancel()
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(messages)
+    cursor, err := chatHistoryCollection.Find(ctx, filter, opts)
+    if err != nil {
+        http.Error(w, err.Error(), 500)
+        fmt.Printf("❌ [MONGO ERROR] Find failed: %v\n", err)
+        return
+    }
+
+    var messages []ChatMessage
+    if err = cursor.All(ctx, &messages); err != nil {
+        http.Error(w, err.Error(), 500)
+        return
+    }
+
+    fmt.Printf("✅ [MSG API] Found %d messages for chat: %s\n", len(messages), chatID)
+
+    // اگر میسج 0 ہیں تو شاید bot_id میچ نہیں ہو رہا
+    if len(messages) == 0 {
+        fmt.Println("⚠️ [WARNING] No messages returned. Check if BotID matches what is in DB.")
+    }
+
+    // reverse to old->new
+    for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+        messages[i], messages[j] = messages[j], messages[i]
+    }
+
+    _ = json.NewEncoder(w).Encode(messages)
 }
 
 func ensureMongoIndexes(db *mongo.Database) error {
