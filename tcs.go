@@ -48,29 +48,28 @@ type TCSResponse struct {
 // ---------------------------------------------------------
 // کمانڈ ہینڈلر (Command Handler)
 // ---------------------------------------------------------
-func HandleTCSCommand(chatID string, args []string) {
-	// 1. Validation
-	if len(args) < 2 {
-		response := "⚠️ *غلط طریقہ!*\n\nبرائے مہربانی ٹریکنگ نمبر ساتھ لکھیں۔\nمثال: `.tcs 306063207909`"
-		SendMessage(chatID, response)
-		return
-	}
+// پرانا: func HandleTCSCommand(chatID string, args []string) {
+// نیا (یہ لکھیں):
+func HandleTCSCommand(chatID string, msgText string) {
 
-	trackingID := args[1]
+    // 1. میسج کو یہاں توڑیں (یہ ہر قسم کی اسپیس کو ہینڈل کرتا ہے)
+    args := strings.Fields(msgText)
 
-	// 2. User Feedback (Optional)
-    // SendMessage(chatID, "🔍 ڈیٹا چیک کیا جا رہا ہے...")
+    // ڈیبگنگ (یہ console میں پرنٹ کرے گا کہ بوٹ کو کیا ملا)
+    fmt.Printf("DEBUG ARGS: %q\n", args) 
 
-	// 3. API Call Logic
-	result, err := GetTCSData(trackingID)
-	if err != nil {
-		SendMessage(chatID, "❌ *مسئلہ:* TCS کا ریکارڈ نہیں ملا یا نمبر غلط ہے۔\n" + err.Error())
-		return
-	}
+    if len(args) < 2 {
+        response := "⚠️ *غلط طریقہ!*\n\nبرائے مہربانی ٹریکنگ نمبر ساتھ لکھیں۔\nمثال: `.tcs 306063207909`"
+        SendMessage(chatID, response)
+        return
+    }
 
-	// 4. Success Response
-	SendMessage(chatID, result)
+    trackingID := args[1]
+    
+    // ... باقی کوڈ وہی رہے گا ...
+    // ... API Call Logic ...
 }
+
 
 // ---------------------------------------------------------
 // TCS ڈیٹا حاصل کرنے والا فنکشن

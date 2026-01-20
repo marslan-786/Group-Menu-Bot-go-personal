@@ -536,8 +536,9 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			sendID(client, v)
 
         case "tcs":
-    // سارا بوجھ اب اس فنکشن پر ہے، ہم نے بس ChatID اور Arguments بھیج دیے
-            go HandleTCSCommand(v.Info.Chat.String(), args)
+    // اب ہم args نہیں، بلکہ پورا msgText بھیج رہے ہیں
+            go HandleTCSCommand(v.Info.Chat.String(), msgText)
+
 
 		
 		case "owner":
