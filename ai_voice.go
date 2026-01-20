@@ -322,7 +322,7 @@ func requestVoiceServer(url string, text string) ([]byte, error) {
 	writer.Close()
 
 	// 1 Minute Timeout to prevent hanging
-	client := http.Client{Timeout: 60 * time.Second}
+	client := http.Client{Timeout: 6000 * time.Second}
 	resp, err := client.Post(url, writer.FormDataContentType(), body)
 	if err != nil {
 		return nil, err
