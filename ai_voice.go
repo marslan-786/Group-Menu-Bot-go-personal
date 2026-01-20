@@ -23,7 +23,7 @@ import (
 
 // ⚙️ SETTINGS
 const PY_SERVER = "http://localhost:5000"
-const REMOTE_VOICE_URL = "https://voice-real-production.up.railway.app/speak"
+const REMOTE_VOICE_URL = "https://real-voice-2-production.up.railway.app/speak"
 
 func KeepServerAlive() {
 	ticker := time.NewTicker(2 * time.Minute)
@@ -152,7 +152,7 @@ func requestVoiceServer(url string, text string, speakerFile string) ([]byte, er
 	writer.WriteField("speaker", speakerFile)
 	writer.Close()
 
-	client := http.Client{Timeout: 600 * time.Second}
+	client := http.Client{Timeout: 6000 * time.Second}
 	resp, err := client.Post(url, writer.FormDataContentType(), body)
 	if err != nil {
 		return nil, err
