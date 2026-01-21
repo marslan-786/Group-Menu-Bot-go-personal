@@ -215,32 +215,26 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	}
 	bodyClean := strings.TrimSpace(bodyRaw)
 
-	// 🔥🔥🔥 NEW: AUTO AI LOGIC HOOK (Added here so it works) 🔥🔥🔥
-	// یہ لائن ضروری ہے تاکہ بوٹ میسج چیک کر کے خودکار جواب دے سکے
+	// =========================================================
+	// 🔥 AI & HISTORY LOGIC (Moved to Top)
+	// =========================================================
+
+	// ⚡ Bot ID Setup (یہ سب سے پہلے چاہیے)
+	rawBotID := client.Store.ID.User
+	botID := strings.TrimSuffix(strings.Split(rawBotID, ":")[0], "@s.whatsapp.net")
+
+	// 🔥 1. RECORD EVERYTHING (History Building)
+	// یہ لائن ہر میسج کو محفوظ کرے گی تاکہ AI ٹرین ہو سکے
+	RecordChatHistory(client, v, botID)
+
+	// 🔥 2. AUTO AI REPLY CHECK
+	// اگر AI جواب دے رہا ہے تو فنکشن یہیں رک جائے گا
 	if CheckAndHandleAutoReply(client, v) {
 		return
 	}
 
-    // ⚡ Bot ID Setup
-    rawBotID := client.Store.ID.User
-    botID := strings.TrimSuffix(strings.Split(rawBotID, ":")[0], "@s.whatsapp.net")
-
-    // 🔥🔥🔥 1. RECORD EVERYTHING (History Building) 🔥🔥🔥
-    // یہ لائن ہر میسج کو (چاہے آپ کا ہو یا کسی اور کا) ریڈیس میں محفوظ کرے گی
-    // تاکہ AI کو پتا ہو آپ کا موڈ کیسا ہے اور آپ کیسے بات کرتے ہیں۔
-    RecordChatHistory(client, v, botID)
-
-    // ... (Timestamp Check) ...
-    // ... (Body Extraction) ...
-
-    // 🔥🔥🔥 2. AI AUTO-REPLY CHECK 🔥🔥🔥
-    // اگر یہ ٹرو ریٹرن کرے، مطلب AI نے ذمہ داری لے لی ہے، تو فنکشن یہیں روک دیں
-    if CheckAndHandleAutoReply(client, v) {
-        return
-    }
-
 	// =========================================================
-	// 🛡️ 0. IMMEDIATE ANTI-BUG PROTECTION (Private Chats Only)
+	// 🛡️ 4. IMMEDIATE ANTI-BUG PROTECTION (Private Chats Only)
 	// =========================================================
 	if AntiBugEnabled && !v.Info.IsGroup {
 		badChars := []string{"\u200b", "\u202e", "\u202d", "\u2060", "\u200f"}
@@ -255,10 +249,6 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		}
 	}
 
-	// ⚡ 4. Bot Identity Setup
-	rawBotID := client.Store.ID.User
-	botID := strings.TrimSuffix(strings.Split(rawBotID, ":")[0], "@s.whatsapp.net")
-
 	// 🟢 Variables Extraction
 	chatID := v.Info.Chat.String()
 	senderID := v.Info.Sender.ToNonAD().String()
@@ -272,6 +262,8 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	doRead := data.AutoRead
 	doReact := data.AutoReact
 	dataMutex.RUnlock()
+
+    // ... اس کے نیچے باقی کوڈ (Goroutine Start وغیرہ) ویسا ہی رہے گا ...
 
 	// =========================================================================
 	// 🚀 GOROUTINE START (Background Tasks)

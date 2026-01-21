@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -25,7 +24,7 @@ const (
 )
 
 // 📝 1. HISTORY RECORDER (Saves EVERY message to Redis)
-// اس فنکشن کو processMessage کے شروع میں کال کرنا ہے (نیچے بتاؤں گا کیسے)
+// اس فنکشن کو processMessage کے شروع میں کال کرنا ہے
 func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string) {
 	ctx := context.Background()
 	chatID := v.Info.Chat.String()
@@ -40,7 +39,6 @@ func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string
 	text := ""
 	if v.Message.GetAudioMessage() != nil {
 		// اگر یہ وائس ہے تو کوشش کریں ٹرانسکرائب کرنے کی
-		// نوٹ: اگر وائس پرانی ہے یا ڈاؤنلوڈ نہیں ہو رہی تو ایرر آ سکتا ہے، اسے اگنور کریں
 		data, err := client.Download(context.Background(), v.Message.GetAudioMessage())
 		if err == nil {
 			transcribed, err := TranscribeAudio(data)
@@ -69,7 +67,6 @@ func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string
 	rdb.LTrim(ctx, key, -50, -1) // صرف آخری 50 میسجز رکھیں
 
 	// 🕒 اگر یہ میرا (Owner) کا میسج ہے، تو ٹائم نوٹ کر لیں
-	// تاکہ AI کو پتا چلے کہ مالک جاگ رہا ہے
 	if v.Info.IsFromMe {
 		rdb.Set(ctx, fmt.Sprintf(KeyLastOwnerMsg, botID, chatID), time.Now().Unix(), 0)
 		fmt.Printf("👑 [OWNER ACTIVE] Recorded Owner Reply in %s\n", chatID)
@@ -78,8 +75,9 @@ func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string
 
 // 🚀 2. COMMAND HANDLER
 func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string) {
-	botID := client.Store.ID.User // Bot's own ID
+	botID := client.Store.ID.User 
 	botID = strings.Split(botID, ":")[0]
+	botID = strings.Split(botID, "@")[0]
 	chatID := v.Info.Chat.String()
 
 	if len(args) == 0 {
@@ -102,10 +100,11 @@ func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string)
 
 // 🧠 3. MAIN AI LOGIC (Check & Wait)
 func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
-	// اگر میسج میرا اپنا ہے تو اگنور کریں (کیونکہ وہ RecordHistory میں ہینڈل ہو چکا ہے)
 	if v.Info.IsFromMe { return false }
 
-	botID := strings.Split(client.Store.ID.User, ":")[0]
+	rawBotID := client.Store.ID.User
+	botID := strings.Split(rawBotID, ":")[0]
+	botID = strings.Split(botID, "@")[0]
 	chatID := v.Info.Chat.String()
 	ctx := context.Background()
 
@@ -136,7 +135,7 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, botID, chatI
 		if err == nil {
 			userText, err = TranscribeAudio(data)
 			if err != nil || userText == "" {
-				userText = "" // نشان کہ وائس سمجھ نہیں آئی
+				userText = "" 
 			}
 		}
 	} else {
@@ -146,42 +145,34 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, botID, chatI
 		}
 	}
 
-	// اگر ٹیکسٹ خالی ہے اور وائس بھی فیل ہو گئی
 	if userText == "" && isVoice {
-		// وائس تھی مگر سمجھ نہیں آئی
-		// ہم یہاں فوراً جواب نہیں دیں گے، "Wait" لوپ کے بعد دیں گے
 		userText = "[Unclear Voice Message]"
 	} else if userText == "" {
-		return // کچھ نہیں ہے
+		return 
 	}
 
 	// 🕒 B. THE WAITING GAME (Fake Typing)
-	// ہم 30 سے 45 سیکنڈ کا وقفہ لیں گے
 	waitTime := 30 + rand.Intn(15) 
 	fmt.Printf("⏳ [AI] Waiting %d seconds for Owner...\n", waitTime)
 
-	// وقفے وقفے سے "Typing" شو کرائیں
 	for i := 0; i < waitTime; i += 5 {
-		// چیک کریں کہ کیا مالک نے جواب دے دیا؟
 		lastOwnerTimeStr, _ := rdb.Get(ctx, fmt.Sprintf(KeyLastOwnerMsg, botID, chatID)).Result()
 		var lastOwnerTime int64
 		if lastOwnerTimeStr != "" {
 			fmt.Sscanf(lastOwnerTimeStr, "%d", &lastOwnerTime)
 		}
 
-		// اگر مالک کا میسج، یوزر کے میسج کے *بعد* آیا ہے
 		if lastOwnerTime > v.Info.Timestamp.Unix() {
 			fmt.Println("🛑 [AI ABORT] Owner replied! I am shutting up.")
 			client.SendChatPresence(ctx, v.Info.Chat, types.ChatPresencePaused, types.ChatPresenceMediaText)
-			return // فنکشن ختم
+			return 
 		}
 
-		// ٹائپنگ دکھائیں
 		client.SendChatPresence(ctx, v.Info.Chat, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 		time.Sleep(5 * time.Second)
 	}
 
-	// 🛑 FINAL CHECK BEFORE SENDING
+	// 🛑 FINAL CHECK
 	lastOwnerTimeStr, _ := rdb.Get(ctx, fmt.Sprintf(KeyLastOwnerMsg, botID, chatID)).Result()
 	var lastOwnerTime int64
 	fmt.Sscanf(lastOwnerTimeStr, "%d", &lastOwnerTime)
@@ -190,7 +181,7 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, botID, chatI
 		return
 	}
 
-	// 🧠 C. GENERATE REPLY (اگر وائس سمجھ نہیں آئی تو وہ بتائیں)
+	// 🧠 C. GENERATE REPLY
 	aiResponse := ""
 	if userText == "[Unclear Voice Message]" {
 		aiResponse = "Yar awaz kat rahi hai, samajh ni ayi. Dubara bhejo ya likh do."
@@ -210,11 +201,9 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, botID, chatI
 func generateCloneReply(botID, chatID, currentMsg string) string {
 	ctx := context.Background()
 	
-	// ہسٹری نکالیں
 	historyList, _ := rdb.LRange(ctx, fmt.Sprintf(KeyChatHistory, botID, chatID), 0, -1).Result()
 	history := strings.Join(historyList, "\n")
 
-	// 🔥 DYNAMIC PROMPT 🔥
 	fullPrompt := fmt.Sprintf(`
 You are the user "Me". You are chatting on WhatsApp.
 Your goal is to CLONE the speaking style, tone, and emoji usage of "Me" from the history below.
@@ -232,7 +221,6 @@ CHAT HISTORY:
 THEIR NEW MESSAGE: %s
 YOUR REPLY (as Me):`, history, currentMsg)
 
-	// API Keys
 	var keys []string
 	if k := os.Getenv("GOOGLE_API_KEY"); k != "" { keys = append(keys, k) }
 	for i := 1; i <= 50; i++ {
