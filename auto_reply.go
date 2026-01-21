@@ -18,13 +18,13 @@ import (
 
 // 💾 Redis Keys
 const (
-	KeyAutoAITarget = "autoai:target_user"  
-	KeyChatHistory  = "chat:history:%s:%s" // botID:chatID -> History
-	KeyLastMsgTime  = "autoai:last_msg_time:%s" // chatID -> Timestamp
-	KeyLastOwnerMsg = "autoai:last_owner_msg:%s" // chatID -> Timestamp
+	KeyAutoAITargets = "autoai:targets_set" // 🔥 Changed to SET for multiple users
+	KeyChatHistory   = "chat:history:%s:%s" // botID:chatID -> History
+	KeyLastMsgTime   = "autoai:last_msg_time:%s"
+	KeyLastOwnerMsg  = "autoai:last_owner_msg:%s"
 )
 
-// 📝 1. HISTORY RECORDER
+// 📝 1. HISTORY RECORDER (Saves All Personal Chats)
 func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string) {
 	// Ignore Groups & Channels
 	if v.Info.IsGroup || strings.Contains(v.Info.Chat.String(), "@newsletter") || v.Info.Chat.String() == "status@broadcast" {
@@ -75,10 +75,10 @@ func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string
 	rdb.LTrim(ctx, key, -50, -1) // Keep last 50
 }
 
-// 🚀 2. COMMAND HANDLER
+// 🚀 2. COMMAND HANDLER (Multi-Target Support)
 func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string) {
 	if len(args) == 0 {
-		sendCleanReply(client, v.Info.Chat, v.Info.ID, "⚠️ Usage: .autoai set <Name>")
+		sendCleanReply(client, v.Info.Chat, v.Info.ID, "⚠️ Usage:\n1. .autoai set <Name>\n2. .autoai off <Name>\n3. .autoai list")
 		return
 	}
 
@@ -92,24 +92,55 @@ func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string)
 			return
 		}
 		targetName := strings.Join(args[1:], " ")
-		rdb.Set(ctx, KeyAutoAITarget, targetName, 0)
-		fmt.Printf("\n🔥 [AUTO-AI] TARGET LOCKED: %s\n", targetName)
-		sendCleanReply(client, v.Info.Chat, v.Info.ID, "✅ AI Set on: "+targetName)
+		// 🔥 ADD TO SET (Multiple Support)
+		rdb.SAdd(ctx, KeyAutoAITargets, targetName)
+		fmt.Printf("\n🔥 [AUTO-AI] ADDED TARGET: %s\n", targetName)
+		sendCleanReply(client, v.Info.Chat, v.Info.ID, "✅ Added to Auto-AI List: "+targetName)
 
 	case "off":
-		rdb.Del(ctx, KeyAutoAITarget)
-		sendCleanReply(client, v.Info.Chat, v.Info.ID, "🛑 Auto AI Stopped.")
+		if len(args) < 2 {
+			// اگر نام نہیں دیا تو سب بند کر دیں؟ یا ایرر دیں؟
+			// فی الحال ہم نام مانگتے ہیں، یا 'all'
+			sendCleanReply(client, v.Info.Chat, v.Info.ID, "❌ Specify Name to remove (or 'all').")
+			return
+		}
+		targetName := strings.Join(args[1:], " ")
+		
+		if strings.ToLower(targetName) == "all" {
+			rdb.Del(ctx, KeyAutoAITargets)
+			sendCleanReply(client, v.Info.Chat, v.Info.ID, "🛑 Auto AI Stopped for EVERYONE.")
+		} else {
+			// 🔥 REMOVE SPECIFIC USER
+			rdb.SRem(ctx, KeyAutoAITargets, targetName)
+			sendCleanReply(client, v.Info.Chat, v.Info.ID, "🛑 Auto AI Stopped for: "+targetName)
+		}
+
+	case "list":
+		// 🔥 SHOW ALL ACTIVE TARGETS
+		targets, err := rdb.SMembers(ctx, KeyAutoAITargets).Result()
+		if err != nil || len(targets) == 0 {
+			sendCleanReply(client, v.Info.Chat, v.Info.ID, "📂 No active targets.")
+			return
+		}
+		msg := "🤖 *Active Auto-AI Targets:*\n"
+		for i, t := range targets {
+			msg += fmt.Sprintf("%d. %s\n", i+1, t)
+		}
+		sendCleanReply(client, v.Info.Chat, v.Info.ID, msg)
 	}
 }
 
-// 🧠 3. MAIN CHECKER
+// 🧠 3. MAIN CHECKER (Checks List of Targets)
 func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 	if v.Info.IsFromMe { return false }
 
 	ctx := context.Background()
-	targetName, err := rdb.Get(ctx, KeyAutoAITarget).Result()
-	if err != nil || targetName == "" { return false }
+	
+	// 🔥 FETCH ALL TARGETS
+	targets, err := rdb.SMembers(ctx, KeyAutoAITargets).Result()
+	if err != nil || len(targets) == 0 { return false }
 
+	// Get Incoming Name
 	incomingName := v.Info.PushName
 	if incomingName == "" {
 		if contact, err := client.Store.Contacts.GetContact(ctx, v.Info.Sender); err == nil && contact.Found {
@@ -117,16 +148,28 @@ func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 			if incomingName == "" { incomingName = contact.PushName }
 		}
 	}
+	
+	// Match Logic
+	incomingLower := strings.ToLower(incomingName)
+	matchedTarget := ""
 
-	if strings.Contains(strings.ToLower(incomingName), strings.ToLower(targetName)) {
-		fmt.Printf("🔔 [AI MATCH] Chatting with %s\n", incomingName)
+	// 🔍 Check if incoming user matches ANYone in our list
+	for _, t := range targets {
+		if strings.Contains(incomingLower, strings.ToLower(t)) {
+			matchedTarget = t
+			break
+		}
+	}
+
+	if matchedTarget != "" {
+		fmt.Printf("🔔 [AI MATCH] Chatting with %s (Matched: %s)\n", incomingName, matchedTarget)
 		go processAIResponse(client, v, incomingName)
 		return true 
 	}
 	return false
 }
 
-// 🤖 4. AI BEHAVIOR ENGINE
+// 🤖 4. AI BEHAVIOR ENGINE (Same Logic as before)
 func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName string) {
 	ctx := context.Background()
 	chatID := v.Info.Chat.String()
@@ -147,17 +190,13 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 
 	// 🛑 B. COLD START LOGIC
 	if !isActiveChat {
-		// ✅ FIX 1: Using rand.Intn to fix "imported but not used" error
 		waitTime := 8 + rand.Intn(5)
 		fmt.Printf("🐢 [MODE] Cold Start. Picking up phone in %ds...\n", waitTime)
 		
-		// 1. Wait to "Pick up phone"
 		time.Sleep(time.Duration(waitTime) * time.Second)
-		
-		// 2. Online
 		client.SendPresence(ctx, types.PresenceAvailable)
 
-		// 3. Fake Typing Loop
+		// Fake Typing Loop
 		typingDuration := 30 
 		fmt.Println("✍️ [AI] Fake Typing / Waiting for Owner...")
 		
@@ -194,23 +233,19 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 
 	// 📥 C. PROCESS INPUT
 	userText := ""
-	isVoice := false // ✅ FIX 2: Declared here
+	isVoice := false 
 	voiceDuration := 0
 
 	if v.Message.GetAudioMessage() != nil {
-		isVoice = true // ✅ FIX 2: Used here
+		isVoice = true 
 		voiceDuration = int(v.Message.GetAudioMessage().GetSeconds())
 		if voiceDuration == 0 { voiceDuration = 5 }
 		
 		fmt.Printf("🎤 [VOICE] Listening... (%d sec)\n", voiceDuration)
 		
-		// 1. Mark Read
 		client.MarkRead(ctx, []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
-		
-		// 2. Play Time
 		time.Sleep(time.Duration(voiceDuration) * time.Second)
 		
-		// 3. Transcribe
 		data, err := client.Download(ctx, v.Message.GetAudioMessage())
 		if err == nil {
 			userText, _ = TranscribeAudio(data)
@@ -220,12 +255,9 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 		userText = v.Message.GetConversation()
 		if userText == "" { userText = v.Message.GetExtendedTextMessage().GetText() }
 		
-		// Text Reading Time
 		if userText != "" {
 			client.MarkRead(ctx, []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
 			
-			// ✅ FIX 2: Only wait to "read" text if it's NOT a voice message
-			// (because we already waited for voice listening above)
 			if !isVoice {
 				readDelay := len(userText) / 10
 				if readDelay < 2 { readDelay = 2 }
