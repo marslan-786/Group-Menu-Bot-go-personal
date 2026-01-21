@@ -23,10 +23,10 @@ const (
 	KeyLastMsgTime  = "autoai:last_msg_time" 
 )
 
-// 🚀 1. COMMAND HANDLER
+// 🚀 1. COMMAND HANDLER (NAME BASED)
 func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string) {
 	if len(args) == 0 {
-		sendCleanReply(client, v.Info.Chat, v.Info.ID, "⚠️ Usage:\n1. .autoai set 92300XXXXXX\n2. .autoai prompt (Text)\n3. .autoai off")
+		sendCleanReply(client, v.Info.Chat, v.Info.ID, "⚠️ Usage:\n1. .autoai set Muhammad Arslan\n2. .autoai prompt (Text)\n3. .autoai off")
 		return
 	}
 
@@ -36,18 +36,17 @@ func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string)
 	switch mode {
 	case "set":
 		if len(args) < 2 {
-			sendCleanReply(client, v.Info.Chat, v.Info.ID, "❌ Please provide a number.")
+			sendCleanReply(client, v.Info.Chat, v.Info.ID, "❌ Please write the EXACT Name.")
 			return
 		}
-		targetNum := args[1]
-		// نمبر فارمیٹنگ
-		if !strings.Contains(targetNum, "@") {
-			targetNum += "@s.whatsapp.net"
-		}
-		// Redis Save
-		rdb.Set(ctx, KeyAutoAITarget, targetNum, 0)
-		fmt.Printf("✅ [AUTO-AI] Target Set to: %s\n", targetNum)
-		sendCleanReply(client, v.Info.Chat, v.Info.ID, "✅ Auto AI Target Locked: "+targetNum)
+		
+		// 🔥 پورا نام اٹھائیں (spaces کے ساتھ)
+		targetName := strings.Join(args[1:], " ")
+		targetName = strings.TrimSpace(targetName)
+		
+		rdb.Set(ctx, KeyAutoAITarget, targetName, 0)
+		fmt.Printf("✅ [AUTO-AI] Target Name Set: %s\n", targetName)
+		sendCleanReply(client, v.Info.Chat, v.Info.ID, "✅ Target Locked by Name: "+targetName)
 
 	case "prompt":
 		if len(args) < 2 {
@@ -56,12 +55,10 @@ func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string)
 		}
 		promptData := strings.Join(args[1:], " ")
 		rdb.Set(ctx, KeyAutoAIPrompt, promptData, 0)
-		fmt.Println("✅ [AUTO-AI] New Prompt Saved!")
-		sendCleanReply(client, v.Info.Chat, v.Info.ID, "✅ Persona/Prompt Updated!")
+		sendCleanReply(client, v.Info.Chat, v.Info.ID, "✅ Persona Saved!")
 
 	case "off":
 		rdb.Del(ctx, KeyAutoAITarget)
-		fmt.Println("🛑 [AUTO-AI] System Disabled.")
 		sendCleanReply(client, v.Info.Chat, v.Info.ID, "🛑 Auto AI Stopped.")
 
 	default:
@@ -69,60 +66,45 @@ func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string)
 	}
 }
 
-// 🧠 2. MAIN LOGIC (Intercepts Message)
-// 🧠 2. MAIN LOGIC (Updated with LID Resolver)
+// 🧠 2. MAIN LOGIC (NAME MATCHING 🔥)
 func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 	ctx := context.Background()
 	
-	// 1. Redis سے ٹارگٹ چیک کریں
-	targetUser, err := rdb.Get(ctx, KeyAutoAITarget).Result()
-	if err != nil || targetUser == "" {
-		return false // کوئی ٹارگٹ سیٹ نہیں ہے
+	// 1. ٹارگٹ نام اٹھائیں
+	targetName, err := rdb.Get(ctx, KeyAutoAITarget).Result()
+	if err != nil || targetName == "" {
+		return false 
 	}
 
-	// 🕵️ 2. SENDER RESOLVER (LID to Phone Number Fix)
-	senderJID := v.Info.Sender.ToNonAD()
-	senderString := senderJID.String()
+	// 2. میسج بھیجنے والے کا نام (PushName) نکالیں
+	incomingName := v.Info.PushName
+	senderID := v.Info.Sender.ToNonAD().String() // صرف لاگنگ کے لیے
 
-	// اگر آنے والا میسج LID ہے (مطلب اس میں @lid ہے یا نمبر عجیب ہے)
-	if senderJID.Server == types.HiddenUserServer || strings.Contains(senderString, "@lid") {
-		// ڈیٹا بیس (Contact Store) سے پوچھیں کہ یہ LID کس کا ہے؟
-		contact, err := client.Store.Contacts.GetContact(senderJID)
-		if err == nil && contact.Found {
-			// اگر کانٹیکٹ مل گیا تو اس کا اصلی فون نمبر اٹھا لیں
-			// نوٹ: کبھی کبھی contact.JID خالی ہوتا ہے، اس لیے چیک ضروری ہے
-			if contact.JID.User != "" {
-				senderString = contact.JID.ToNonAD().String()
-				// fmt.Printf("🔄 [AUTO-AI] Converted LID %s -> %s\n", senderJID.String(), senderString)
-			}
-		}
-	}
+	// 🔍 DEBUG: کنسول میں دیکھیں کہ کیا نام آ رہا ہے
+	// fmt.Printf("🕵️ [CHECK] Incoming Name: '%s' | Target: '%s'\n", incomingName, targetName)
 
-	// 🔍 DEBUG PRINT (اب اصلی نمبر پرنٹ ہوگا)
-	// fmt.Printf("🔍 AutoAI Checking: Sender [%s] vs Target [%s]\n", senderString, targetUser)
-
-	// 3. اب میچ کریں (اب دونوں طرف فون نمبر ہوگا)
-	if senderString == targetUser {
-		fmt.Printf("\n🔔 [AUTO-AI] MATCH FOUND! Message from: %s\n", senderString)
+	// 3. NAME MATCHING (Case Insensitive)
+	// دونوں کو چھوٹا (Lowercase) کر کے میچ کریں تاکہ spelling mistake نہ ہو
+	if strings.EqualFold(strings.TrimSpace(incomingName), strings.TrimSpace(targetName)) {
 		
-		// پروسیسنگ تھریڈ میں ڈال دیں
-		go processHumanReply(client, v, senderString)
+		fmt.Printf("\n🔔 [AUTO-AI] NAME MATCHED! (%s)\n", incomingName)
+		
+		// پروسیسنگ شروع
+		go processHumanReply(client, v, senderID)
 		return true 
 	}
 
 	return false
 }
 
-}
-
-// 🤖 3. HUMAN BEHAVIOR ENGINE (With Logs & Multi-Key)
+// 🤖 3. HUMAN BEHAVIOR ENGINE
 func processHumanReply(client *whatsmeow.Client, v *events.Message, senderID string) {
 	ctx := context.Background()
 
 	// 📥 A. میسج نکالیں
 	userText := ""
 	if v.Message.GetAudioMessage() != nil {
-		fmt.Println("🎤 [AUTO-AI] Voice detected! Transcribing...")
+		fmt.Println("🎤 [AUTO-AI] Voice detected!")
 		data, err := client.Download(context.Background(), v.Message.GetAudioMessage())
 		if err == nil {
 			userText, _ = TranscribeAudio(data)
@@ -135,145 +117,71 @@ func processHumanReply(client *whatsmeow.Client, v *events.Message, senderID str
 		}
 	}
 
-	if userText == "" {
-		fmt.Println("⚠️ [AUTO-AI] Empty message text. Skipping.")
-		return
-	}
-	fmt.Printf("📩 [AUTO-AI] User Said: \"%s\"\n", userText)
+	if userText == "" { return }
+	fmt.Printf("📩 User (%s): \"%s\"\n", v.Info.PushName, userText)
 
-	// ⏳ B. ٹائمنگ اور "Online" سٹیٹس
-	lastTimeStr, _ := rdb.Get(ctx, KeyLastMsgTime).Result()
-	var lastTime int64
-	if lastTimeStr != "" {
-		fmt.Sscanf(lastTimeStr, "%d", &lastTime)
-	}
-	currentTime := time.Now().Unix()
-	timeDiff := currentTime - lastTime
-	rdb.Set(ctx, KeyLastMsgTime, fmt.Sprintf("%d", currentTime), 0)
-
-	// ڈیلے کیلکولیشن
-	waitSec := 2
-	if timeDiff > 600 { // 10 منٹ بعد آیا ہے
-		waitSec = 8 + rand.Intn(5) // 8 سے 12 سیکنڈ رکو (Late Reply)
-		fmt.Printf("💤 [AUTO-AI] Long gap detected. Waiting %d sec before opening chat...\n", waitSec)
-	} else {
-		waitSec = 2 + rand.Intn(3) // 2 سے 5 سیکنڈ (Quick Reply)
-		fmt.Printf("⚡ [AUTO-AI] Chat active. Waiting %d sec...\n", waitSec)
-	}
-
+	// ⏳ B. ٹائمنگ (Online & Wait)
+	waitSec := 2 + rand.Intn(4)
+	fmt.Printf("⏳ Waiting %d seconds...\n", waitSec)
 	time.Sleep(time.Duration(waitSec) * time.Second)
 
-	// 🟢 C. اب "Online" شو ہوں اور بلیو ٹک دیں
-	fmt.Println("👀 [AUTO-AI] Coming Online & Marking Read...")
-	client.SendPresence(context.Background(), types.PresenceAvailable) // Online Status
+	// Online Show & Read
+	client.SendPresence(context.Background(), types.PresenceAvailable)
 	client.MarkRead(context.Background(), []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
+	
+	// Thinking Time
+	time.Sleep(1 * time.Second)
 
-	// تھوڑا سا پڑھنے کا ٹائم
-	readTime := len(userText) / 15
-	if readTime < 1 { readTime = 1 }
-	time.Sleep(time.Duration(readTime) * time.Second)
-
-	// 🧠 D. جواب جنریٹ کریں (MULTI-KEY LOGIC)
-	fmt.Println("🤔 [AUTO-AI] Thinking...")
+	// 🧠 C. جواب (Multi-Key)
 	customPrompt, _ := rdb.Get(ctx, KeyAutoAIPrompt).Result()
-	if customPrompt == "" {
-		customPrompt = "You are a friendly assistant. Reply in Roman Urdu."
-	}
+	if customPrompt == "" { customPrompt = "Reply casually." }
 
 	aiResponse := generateGeminiReplyMultiKey(customPrompt, userText, senderID)
-	fmt.Printf("💡 [AUTO-AI] Generated Reply: \"%s\"\n", aiResponse)
-
-	// ✍️ E. ٹائپنگ دکھائیں
-	fmt.Println("✍️ [AUTO-AI] Typing...")
+	
+	// ✍️ D. ٹائپنگ
 	client.SendChatPresence(context.Background(), v.Info.Chat, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+	typingDelay := len(aiResponse) / 12
+	if typingDelay < 2 { typingDelay = 2 }
+	time.Sleep(time.Duration(typingDelay) * time.Second)
 
-	typingTime := len(aiResponse) / 10
-	if typingTime < 2 { typingTime = 2 }
-	if typingTime > 8 { typingTime = 8 }
-	time.Sleep(time.Duration(typingTime) * time.Second)
-
-	// 📤 F. میسج بھیجیں
+	// 📤 E. بھیجیں
 	client.SendChatPresence(context.Background(), v.Info.Chat, types.ChatPresencePaused, types.ChatPresenceMediaText)
 	sendCleanReply(client, v.Info.Chat, v.Info.ID, aiResponse)
 	
-	fmt.Println("✅ [AUTO-AI] Message Sent Successfully!")
-
-	// ہسٹری سیو کریں
+	fmt.Printf("✅ Sent Reply: \"%s\"\n", aiResponse)
 	SaveAIHistory(senderID, userText, aiResponse, "") 
 }
 
-// 🔑 Helper: Gemini Multi-Key Switcher
+// 🔑 Helper: Multi-Key Switcher
 func generateGeminiReplyMultiKey(systemPrompt, userQuery, senderID string) string {
 	ctx := context.Background()
 	history := GetAIHistory(senderID)
 
-	// پرامپٹ تیار کریں
-	fullPrompt := fmt.Sprintf(`
-%s
----
-CONTEXT:
-%s
----
-USER: %s
-REPLY (As Persona):`, systemPrompt, history, userQuery)
+	fullPrompt := fmt.Sprintf("%s\n---\nCONTEXT:\n%s\n---\nUSER: %s\nREPLY:", systemPrompt, history, userQuery)
 
-	// 🔑 ساری کیز جمع کریں
 	var keys []string
 	if k := os.Getenv("GOOGLE_API_KEY"); k != "" { keys = append(keys, k) }
-	
-	// 50 تک کیز چیک کریں
 	for i := 1; i <= 50; i++ {
-		keyName := fmt.Sprintf("GOOGLE_API_KEY_%d", i)
-		if k := os.Getenv(keyName); k != "" {
-			keys = append(keys, k)
-		}
+		if k := os.Getenv(fmt.Sprintf("GOOGLE_API_KEY_%d", i)); k != "" { keys = append(keys, k) }
 	}
 
-	if len(keys) == 0 {
-		return "⚠️ سسٹم ایرر: کوئی API Key نہیں ملی۔"
-	}
+	if len(keys) == 0 { return "No API Keys found." }
 
-	// 🔄 ون بائی ون ٹرائی کریں
-	for i, key := range keys {
+	for _, key := range keys {
 		client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: key})
-		if err != nil {
-			fmt.Printf("❌ [AI] Key #%d format error. Switching...\n", i+1)
-			continue
-		}
-
-		// ٹمپریچر 1.2 رکھا ہے تاکہ جواب تھوڑا نیچرل/کریٹیو ہو
+		if err != nil { continue }
 		resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash", genai.Text(fullPrompt), nil)
-		
-		if err != nil {
-			fmt.Printf("❌ [AI] Key #%d Failed/Exhausted. Switching... Error: %v\n", i+1, err)
-			continue // اگلی کی ٹرائی کریں
-		}
-
-		// اگر کامیاب ہو گیا تو فوراً واپس بھیج دیں
-		return resp.Text()
+		if err == nil { return resp.Text() }
 	}
-
-	return "😴 یار ابھی میرا دماغ کام نہیں کر رہا (Quota Exceeded)."
+	return "Sorry, connection issue."
 }
 
-// 🧼 Helper: Clean Reply
 func sendCleanReply(client *whatsmeow.Client, chat types.JID, replyToID string, text string) {
 	msg := &waProto.Message{
 		ExtendedTextMessage: &waProto.ExtendedTextMessage{
 			Text: proto.String(text),
-			ContextInfo: &waProto.ContextInfo{
-				StanzaID:      proto.String(replyToID),
-				Participant:   proto.String(chat.String()),
-				QuotedMessage: &waProto.Message{Conversation: proto.String("...")},
-			},
+			ContextInfo: &waProto.ContextInfo{StanzaID: proto.String(replyToID), Participant: proto.String(chat.String())},
 		},
 	}
 	client.SendMessage(context.Background(), chat, msg)
-}
-
-// 🎲 Helper: Random Sleep
-func sleepRandom(min, max int) {
-	rand.Seed(time.Now().UnixNano())
-	duration := rand.Intn(max-min+1) + min
-	time.Sleep(time.Duration(duration) * time.Second)
 }
