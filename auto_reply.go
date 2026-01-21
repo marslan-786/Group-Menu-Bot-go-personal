@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-//	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -12,7 +11,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/types"
-	"go.mau.fi/whatsmeow/types/events"
+	"go.mau.fi/whatsmeow/types/events" // ✅ Added this import
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/proto"
 )
@@ -25,7 +24,8 @@ const (
 )
 
 // 🚀 1. COMMAND HANDLER (Clean Case for commands.go)
-func HandleAutoAICmd(client *whatsmeow.Client, v *whatsmeow.Message, args []string) {
+// ✅ Fixed type: *events.Message
+func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string) {
 	if len(args) == 0 {
 		sendCleanReply(client, v.Info.Chat, v.Info.ID, "⚠️ Usage:\n1. .autoai set 923001234567\n2. .autoai prompt (Paste Chat)\n3. .autoai off")
 		return
@@ -69,7 +69,8 @@ func HandleAutoAICmd(client *whatsmeow.Client, v *whatsmeow.Message, args []stri
 
 // 🧠 2. MAIN LOGIC (Checks incoming messages)
 // یہ فنکشن processMessage کے اندر سب سے اوپر کال ہوگا
-func CheckAndHandleAutoReply(client *whatsmeow.Client, v *whatsmeow.Message) bool {
+// ✅ Fixed type: *events.Message
+func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 	ctx := context.Background()
 	
 	// 1. چیک کریں کہ ٹارگٹ سیٹ ہے یا نہیں
@@ -90,7 +91,8 @@ func CheckAndHandleAutoReply(client *whatsmeow.Client, v *whatsmeow.Message) boo
 }
 
 // 🤖 3. HUMAN BEHAVIOR ENGINE
-func processHumanReply(client *whatsmeow.Client, v *whatsmeow.Message, senderID string) {
+// ✅ Fixed type: *events.Message
+func processHumanReply(client *whatsmeow.Client, v *events.Message, senderID string) {
 	ctx := context.Background()
 
 	// ⏳ Step A: ٹائمنگ کیلکولیشن (Human Delay)
