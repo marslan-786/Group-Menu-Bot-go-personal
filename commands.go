@@ -360,7 +360,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			// c. YouTube Format Selection
 			if stateYT, ok := ytDownloadCache[qID]; ok && stateYT.BotLID == botID {
 				delete(ytDownloadCache, qID)
-				go handleYTDownload(client, v, stateYT.Url, bodyClean, (bodyClean == "4")) // 4 = Audio
+				go handleYTDownload(client, v, stateYT.Url, bodyClean, (bodyClean == "8")) // 4 = Audio
 				return
 			}
 		}

@@ -808,15 +808,18 @@ func handleYTDownloadMenu(client *whatsmeow.Client, v *events.Message, ytUrl str
 	senderLID := v.Info.Sender.User
 
 	menu := `╔════════════════════╗
-║    🎬 VIDEO SELECTOR 
+║    🎬 QUALITY SELECTOR 
 ╠════════════════════╣
-║ 1️⃣ 360p (Fast)
-║ 2️⃣ 720p (HD)
-║ 3️⃣ 1080p (FHD)
-║ 4️⃣ MP3 (Audio)
+║ 1️⃣ 144p  (Tiny)
+║ 2️⃣ 240p  (Low)
+║ 3️⃣ 360p  (Normal)
+║ 4️⃣ 720p  (HD)
+║ 5️⃣ 1080p (FHD)
+║ 6️⃣ 4K    (Ultra)
+║ 7️⃣ 8K    (Extreme)
+║ 8️⃣ MP3   (Audio)
 ║
-║ ⏳ Select an option by 
-║ replying to this card.
+║ ⏳ Reply with number
 ╚════════════════════╝`
 
 	resp, err := client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
@@ -824,7 +827,7 @@ func handleYTDownloadMenu(client *whatsmeow.Client, v *events.Message, ytUrl str
 	})
 
 	if err == nil {
-		// 💾 میسج آئی ڈی کے ساتھ کیش کریں
+		// 💾 کیشے سیو کریں
 		ytDownloadCache[resp.ID] = YTState{
 			Url:      ytUrl,
 			BotLID:   myID,
@@ -832,7 +835,7 @@ func handleYTDownloadMenu(client *whatsmeow.Client, v *events.Message, ytUrl str
 		}
 		fmt.Printf("📂 [YT-MENU] Cached ID: %s for Bot: %s\n", resp.ID, myID)
 		
-		// ۱ منٹ بعد صفائی
+		// 1 منٹ بعد صفائی
 		go func() {
 			time.Sleep(1 * time.Minute)
 			delete(ytDownloadCache, resp.ID)
@@ -840,31 +843,45 @@ func handleYTDownloadMenu(client *whatsmeow.Client, v *events.Message, ytUrl str
 	}
 }
 
+
 func handleYTDownload(client *whatsmeow.Client, v *events.Message, ytUrl, choice string, isAudio bool) {
-	// ⏳ ری ایکشن دیں تاکہ یوزر کو پتہ چلے ریکویسٹ لے لی گئی ہے
+	// ⏳ ری ایکشن
 	react(client, v.Info.Chat, v.Info.ID, "⏳")
 
 	mode := "video"
-	// فارمیٹ سلیکشن لاجک (وہی پرانی)
+	// ڈیفالٹ فارمیٹ (اگر کوئی غلط نمبر دبائے تو 720p آئے گا)
 	format := "bestvideo[height<=720]+bestaudio/best"
+
+	// اگر یوزر نے 8 دبایا ہے تو اسے آڈیو کر دیں
+	if choice == "8" {
+		isAudio = true
+	}
 
 	if isAudio {
 		mode = "audio"
 	} else {
 		switch choice {
-		case "1":
+		case "1": // 144p
+			format = "bestvideo[height<=144]+bestaudio/best"
+		case "2": // 240p
+			format = "bestvideo[height<=240]+bestaudio/best"
+		case "3": // 360p
 			format = "bestvideo[height<=360]+bestaudio/best"
-		case "2":
+		case "4": // 720p
 			format = "bestvideo[height<=720]+bestaudio/best"
-		case "3":
+		case "5": // 1080p
 			format = "bestvideo[height<=1080]+bestaudio/best"
+		case "6": // 4K (2160p)
+			format = "bestvideo[height<=2160]+bestaudio/best"
+		case "7": // 8K (4320p)
+			format = "bestvideo[height<=4320]+bestaudio/best"
 		}
 	}
 
-	// 🚀 اہم تبدیلی: "go" کیورڈ کے ساتھ کال کریں تاکہ یہ فوراً بیک گراؤنڈ میں چلا جائے
-	// اور یوزر کو اگلا مینو فوراً نظر آئے
+	// 🚀 ڈاؤنلوڈ شروع کریں
 	go downloadAndSend(client, v, ytUrl, mode, format)
 }
+
 
 // ------------------- مددگار فنکشنز (Helpers) -------------------
 
