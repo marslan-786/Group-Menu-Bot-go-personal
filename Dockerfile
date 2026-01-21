@@ -46,8 +46,6 @@ FROM python:3.10-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1
 
-# 🔥 Speed Up: Removed 'aria2' (Banned), Kept 'atomicparsley'
-# ✅ Fix Warning: Node is installed for yt-dlp
 RUN apt-get update && apt-get install -y \
     ffmpeg imagemagick curl sqlite3 libsqlite3-0 \
     nodejs npm \
