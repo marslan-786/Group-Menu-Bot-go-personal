@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+//	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
@@ -12,6 +12,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/proto"
 )
