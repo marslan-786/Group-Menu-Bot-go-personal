@@ -221,6 +221,24 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		return
 	}
 
+    // ⚡ Bot ID Setup
+    rawBotID := client.Store.ID.User
+    botID := strings.TrimSuffix(strings.Split(rawBotID, ":")[0], "@s.whatsapp.net")
+
+    // 🔥🔥🔥 1. RECORD EVERYTHING (History Building) 🔥🔥🔥
+    // یہ لائن ہر میسج کو (چاہے آپ کا ہو یا کسی اور کا) ریڈیس میں محفوظ کرے گی
+    // تاکہ AI کو پتا ہو آپ کا موڈ کیسا ہے اور آپ کیسے بات کرتے ہیں۔
+    RecordChatHistory(client, v, botID)
+
+    // ... (Timestamp Check) ...
+    // ... (Body Extraction) ...
+
+    // 🔥🔥🔥 2. AI AUTO-REPLY CHECK 🔥🔥🔥
+    // اگر یہ ٹرو ریٹرن کرے، مطلب AI نے ذمہ داری لے لی ہے، تو فنکشن یہیں روک دیں
+    if CheckAndHandleAutoReply(client, v) {
+        return
+    }
+
 	// =========================================================
 	// 🛡️ 0. IMMEDIATE ANTI-BUG PROTECTION (Private Chats Only)
 	// =========================================================
