@@ -18,15 +18,14 @@ import (
 
 // 💾 Redis Keys
 const (
-	KeyAutoAITargets = "autoai:targets_set" // 🔥 Changed to SET for multiple users
-	KeyChatHistory   = "chat:history:%s:%s" // botID:chatID -> History
+	KeyAutoAITargets = "autoai:targets_set"
+	KeyChatHistory   = "chat:history:%s:%s" // botID:chatID
 	KeyLastMsgTime   = "autoai:last_msg_time:%s"
 	KeyLastOwnerMsg  = "autoai:last_owner_msg:%s"
 )
 
-// 📝 1. HISTORY RECORDER (Saves All Personal Chats)
+// 📝 1. HISTORY RECORDER (Saves All Chats)
 func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string) {
-	// Ignore Groups & Channels
 	if v.Info.IsGroup || strings.Contains(v.Info.Chat.String(), "@newsletter") || v.Info.Chat.String() == "status@broadcast" {
 		return
 	}
@@ -34,15 +33,13 @@ func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string
 	ctx := context.Background()
 	chatID := v.Info.Chat.String()
 
-	// 🕒 Owner Message Timestamp
+	// 🕒 Owner Timestamp Update
+	// اگر آپ (Owner) بولے، تو ٹائم نوٹ کریں تاکہ بوٹ خاموش رہے
 	if v.Info.IsFromMe {
 		rdb.Set(ctx, fmt.Sprintf(KeyLastOwnerMsg, chatID), time.Now().Unix(), 0)
 	}
 
-	// Ignore Junk Media
-	if v.Message.GetVideoMessage() != nil || 
-	   v.Message.GetStickerMessage() != nil || 
-	   v.Message.GetDocumentMessage() != nil {
+	if v.Message.GetVideoMessage() != nil || v.Message.GetStickerMessage() != nil || v.Message.GetDocumentMessage() != nil {
 		return
 	}
 
@@ -68,17 +65,16 @@ func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string
 
 	if text == "" { return }
 
-	// 💾 Save History
 	entry := fmt.Sprintf("%s: %s", senderName, text)
 	key := fmt.Sprintf(KeyChatHistory, botID, chatID)
 	rdb.RPush(ctx, key, entry)
-	rdb.LTrim(ctx, key, -50, -1) // Keep last 50
+	rdb.LTrim(ctx, key, -50, -1)
 }
 
-// 🚀 2. COMMAND HANDLER (Multi-Target Support)
+// 🚀 2. COMMAND HANDLER
 func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string) {
 	if len(args) == 0 {
-		sendCleanReply(client, v.Info.Chat, v.Info.ID, "⚠️ Usage:\n1. .autoai set <Name>\n2. .autoai off <Name>\n3. .autoai list")
+		sendCleanReply(client, v.Info.Chat, v.Info.ID, "⚠️ Usage:\n.autoai set <Name>\n.autoai off <Name/all>\n.autoai list")
 		return
 	}
 
@@ -92,37 +88,27 @@ func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string)
 			return
 		}
 		targetName := strings.Join(args[1:], " ")
-		// 🔥 ADD TO SET (Multiple Support)
 		rdb.SAdd(ctx, KeyAutoAITargets, targetName)
-		fmt.Printf("\n🔥 [AUTO-AI] ADDED TARGET: %s\n", targetName)
-		sendCleanReply(client, v.Info.Chat, v.Info.ID, "✅ Added to Auto-AI List: "+targetName)
+		fmt.Printf("\n🔥 [AUTO-AI] ADDED: %s\n", targetName)
+		sendCleanReply(client, v.Info.Chat, v.Info.ID, "✅ AI Active for: "+targetName)
 
 	case "off":
 		if len(args) < 2 {
-			// اگر نام نہیں دیا تو سب بند کر دیں؟ یا ایرر دیں؟
-			// فی الحال ہم نام مانگتے ہیں، یا 'all'
-			sendCleanReply(client, v.Info.Chat, v.Info.ID, "❌ Specify Name to remove (or 'all').")
+			sendCleanReply(client, v.Info.Chat, v.Info.ID, "❌ Specify Name or 'all'.")
 			return
 		}
 		targetName := strings.Join(args[1:], " ")
-		
 		if strings.ToLower(targetName) == "all" {
 			rdb.Del(ctx, KeyAutoAITargets)
-			sendCleanReply(client, v.Info.Chat, v.Info.ID, "🛑 Auto AI Stopped for EVERYONE.")
+			sendCleanReply(client, v.Info.Chat, v.Info.ID, "🛑 Stopped for EVERYONE.")
 		} else {
-			// 🔥 REMOVE SPECIFIC USER
 			rdb.SRem(ctx, KeyAutoAITargets, targetName)
-			sendCleanReply(client, v.Info.Chat, v.Info.ID, "🛑 Auto AI Stopped for: "+targetName)
+			sendCleanReply(client, v.Info.Chat, v.Info.ID, "🛑 Stopped for: "+targetName)
 		}
 
 	case "list":
-		// 🔥 SHOW ALL ACTIVE TARGETS
-		targets, err := rdb.SMembers(ctx, KeyAutoAITargets).Result()
-		if err != nil || len(targets) == 0 {
-			sendCleanReply(client, v.Info.Chat, v.Info.ID, "📂 No active targets.")
-			return
-		}
-		msg := "🤖 *Active Auto-AI Targets:*\n"
+		targets, _ := rdb.SMembers(ctx, KeyAutoAITargets).Result()
+		msg := "🤖 *Active Targets:*\n"
 		for i, t := range targets {
 			msg += fmt.Sprintf("%d. %s\n", i+1, t)
 		}
@@ -130,17 +116,29 @@ func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string)
 	}
 }
 
-// 🧠 3. MAIN CHECKER (Checks List of Targets)
+// 🧠 3. MAIN CHECKER
 func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 	if v.Info.IsFromMe { return false }
 
 	ctx := context.Background()
-	
-	// 🔥 FETCH ALL TARGETS
+	chatID := v.Info.Chat.String()
+
+	// 🛑 OWNER INTERRUPT CHECK
+	// اگر اونر نے پچھلے 60 سیکنڈ (1 منٹ) کے اندر کوئی میسج کیا ہے، تو بوٹ خاموش رہے
+	lastOwnerMsgStr, _ := rdb.Get(ctx, fmt.Sprintf(KeyLastOwnerMsg, chatID)).Result()
+	if lastOwnerMsgStr != "" {
+		var lastOwnerMsg int64
+		fmt.Sscanf(lastOwnerMsgStr, "%d", &lastOwnerMsg)
+		if time.Now().Unix() - lastOwnerMsg < 60 {
+			// fmt.Println("🛑 Owner is active. AI Paused.")
+			return false
+		}
+	}
+
+	// 🔍 Check Targets
 	targets, err := rdb.SMembers(ctx, KeyAutoAITargets).Result()
 	if err != nil || len(targets) == 0 { return false }
 
-	// Get Incoming Name
 	incomingName := v.Info.PushName
 	if incomingName == "" {
 		if contact, err := client.Store.Contacts.GetContact(ctx, v.Info.Sender); err == nil && contact.Found {
@@ -149,126 +147,114 @@ func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 		}
 	}
 	
-	// Match Logic
 	incomingLower := strings.ToLower(incomingName)
-	matchedTarget := ""
-
-	// 🔍 Check if incoming user matches ANYone in our list
 	for _, t := range targets {
 		if strings.Contains(incomingLower, strings.ToLower(t)) {
-			matchedTarget = t
-			break
+			fmt.Printf("🔔 [AI MATCH] %s detected!\n", incomingName)
+			go processAIResponse(client, v, incomingName)
+			return true 
 		}
-	}
-
-	if matchedTarget != "" {
-		fmt.Printf("🔔 [AI MATCH] Chatting with %s (Matched: %s)\n", incomingName, matchedTarget)
-		go processAIResponse(client, v, incomingName)
-		return true 
 	}
 	return false
 }
 
-// 🤖 4. AI BEHAVIOR ENGINE (Same Logic as before)
+// 🤖 4. AI BEHAVIOR ENGINE (Correct Human Flow)
 func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName string) {
 	ctx := context.Background()
 	chatID := v.Info.Chat.String()
 	
-	// ⏳ A. CHECK TIMING
+	// ⏳ A. CHECK TIMING (Active vs Cold)
 	lastTimeStr, _ := rdb.Get(ctx, fmt.Sprintf(KeyLastMsgTime, chatID)).Result()
 	var lastTime int64
 	if lastTimeStr != "" {
 		fmt.Sscanf(lastTimeStr, "%d", &lastTime)
 	}
 	
-	// Update Last Msg Time
 	currentTime := time.Now().Unix()
 	rdb.Set(ctx, fmt.Sprintf(KeyLastMsgTime, chatID), fmt.Sprintf("%d", currentTime), 0)
 
 	timeDiff := currentTime - lastTime
 	isActiveChat := timeDiff < 60 
 
-	// 🛑 B. COLD START LOGIC
+	// =================================================
+	// 🎭 STEP 1: PHONE PICKUP & ONLINE STATUS
+	// =================================================
+	
 	if !isActiveChat {
-		waitTime := 8 + rand.Intn(5)
-		fmt.Printf("🐢 [MODE] Cold Start. Picking up phone in %ds...\n", waitTime)
+		// COLD START: 10-15s wait to "pick up phone"
+		waitTime := 10 + rand.Intn(6)
+		fmt.Printf("🐢 [MODE] Cold Start. Waiting %ds to pick up phone...\n", waitTime)
 		
-		time.Sleep(time.Duration(waitTime) * time.Second)
+		// Wait Loop with Interrupt Check
+		if interrupted := waitAndCheckOwner(ctx, chatID, waitTime); interrupted { return }
+		
+		// 1. ONLINE (Phone Unlocked)
+		fmt.Println("📱 [STATUS] Online")
 		client.SendPresence(ctx, types.PresenceAvailable)
-
-		// Fake Typing Loop
-		typingDuration := 30 
-		fmt.Println("✍️ [AI] Fake Typing / Waiting for Owner...")
+		time.Sleep(1 * time.Second) // 1 sec delay before reading
 		
-		for i := 0; i < typingDuration; i++ {
-			lastOwnerMsgStr, _ := rdb.Get(ctx, fmt.Sprintf(KeyLastOwnerMsg, chatID)).Result()
-			var lastOwnerMsg int64
-			if lastOwnerMsgStr != "" { fmt.Sscanf(lastOwnerMsgStr, "%d", &lastOwnerMsg) }
-
-			if lastOwnerMsg > v.Info.Timestamp.Unix() {
-				fmt.Println("🛑 [AI ABORT] Owner took over!")
-				client.SendChatPresence(ctx, v.Info.Chat, types.ChatPresencePaused, types.ChatPresenceMediaText)
-				return 
-			}
-
-			if i%5 == 0 {
-				client.SendChatPresence(ctx, v.Info.Chat, types.ChatPresenceComposing, types.ChatPresenceMediaText)
-			}
-			time.Sleep(1 * time.Second)
-		}
 	} else {
-		// ⚡ ACTIVE CHAT
-		fmt.Println("⚡ [MODE] Active Chat! Instant Reply.")
+		// ACTIVE CHAT: Instant Online
+		fmt.Println("⚡ [MODE] Active Chat. Instant Online.")
 		client.SendPresence(ctx, types.PresenceAvailable)
 	}
 
-	// 🛑 FINAL OWNER CHECK
-	lastOwnerMsgStr, _ := rdb.Get(ctx, fmt.Sprintf(KeyLastOwnerMsg, chatID)).Result()
-	var lastOwnerMsg int64
-	if lastOwnerMsgStr != "" { fmt.Sscanf(lastOwnerMsgStr, "%d", &lastOwnerMsg) }
-	if lastOwnerMsg > v.Info.Timestamp.Unix() {
-		fmt.Println("🛑 [AI ABORT] Owner replied at last second!")
-		return 
-	}
+	// =================================================
+	// 👁️ STEP 2: READING / LISTENING (The Blue Tick)
+	// =================================================
 
-	// 📥 C. PROCESS INPUT
 	userText := ""
-	isVoice := false 
-	voiceDuration := 0
-
+	
+	// 🎤 Voice Handling
 	if v.Message.GetAudioMessage() != nil {
-		isVoice = true 
-		voiceDuration = int(v.Message.GetAudioMessage().GetSeconds())
-		if voiceDuration == 0 { voiceDuration = 5 }
+		duration := int(v.Message.GetAudioMessage().GetSeconds())
+		if duration == 0 { duration = 5 }
+
+		fmt.Printf("🎤 [VOICE] Received. Listening for %ds...\n", duration)
 		
-		fmt.Printf("🎤 [VOICE] Listening... (%d sec)\n", voiceDuration)
-		
+		// 1. Mark Read (Blue Tick) -> Show I have seen it
 		client.MarkRead(ctx, []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
-		time.Sleep(time.Duration(voiceDuration) * time.Second)
 		
+		// 2. "Listening" Delay (Stay Online)
+		// جتنی لمبی وائس ہے، اتنا ٹائم ویٹ کریں (جیسے سن رہے ہوں)
+		if interrupted := waitAndCheckOwner(ctx, chatID, duration); interrupted { return }
+
+		// 3. Convert to Text
 		data, err := client.Download(ctx, v.Message.GetAudioMessage())
 		if err == nil {
 			userText, _ = TranscribeAudio(data)
 			userText = "[Voice Message]: " + userText
+			fmt.Printf("📝 [TRANSCRIPTION] %s\n", userText)
+		} else {
+			userText = "[Unclear Voice Message]"
 		}
+
 	} else {
+		// 📝 Text Handling
 		userText = v.Message.GetConversation()
 		if userText == "" { userText = v.Message.GetExtendedTextMessage().GetText() }
-		
+
 		if userText != "" {
+			// 1. Mark Read (Blue Tick)
+			fmt.Println("👀 [READ] Marked as Read")
 			client.MarkRead(ctx, []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
+
+			// 2. Reading Delay (Based on Length)
+			readDelay := len(userText) / 10
+			if isActiveChat { readDelay = 1 } // If active, read fast
+			if readDelay < 1 { readDelay = 1 }
 			
-			if !isVoice {
-				readDelay := len(userText) / 10
-				if readDelay < 2 { readDelay = 2 }
-				time.Sleep(time.Duration(readDelay) * time.Second)
-			}
+			// پڑھنے کا ٹائم
+			if interrupted := waitAndCheckOwner(ctx, chatID, readDelay); interrupted { return }
 		}
 	}
 
 	if userText == "" { return }
 
-	// 🧠 D. GENERATE REPLY
+	// =================================================
+	// 🧠 STEP 3: THINK & GENERATE
+	// =================================================
+	
 	rawBotID := client.Store.ID.User
 	botID := strings.Split(rawBotID, ":")[0]
 	botID = strings.Split(botID, "@")[0]
@@ -276,27 +262,58 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 	aiResponse := generateCloneReply(botID, chatID, userText, senderName)
 	if aiResponse == "" { return }
 
-	// ✍️ E. REAL TYPING
+	// =================================================
+	// ✍️ STEP 4: TYPING & SENDING
+	// =================================================
+
+	fmt.Println("✍️ [TYPING] Sending Composing status...")
 	client.SendChatPresence(ctx, v.Info.Chat, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 	
-	typeSpeed := len(aiResponse) / 8
-	if isActiveChat { typeSpeed = len(aiResponse) / 15 } 
+	// Typing Speed
+	typeSpeed := len(aiResponse) / 7 // Normal speed
+	if isActiveChat { typeSpeed = len(aiResponse) / 12 } // Fast speed in active chat
 	if typeSpeed < 2 { typeSpeed = 2 }
-	
-	time.Sleep(time.Duration(typeSpeed) * time.Second)
 
+	// Wait while typing
+	if interrupted := waitAndCheckOwner(ctx, chatID, typeSpeed); interrupted { 
+		client.SendChatPresence(ctx, v.Info.Chat, types.ChatPresencePaused, types.ChatPresenceMediaText)
+		return 
+	}
+
+	// 🚀 SEND
 	client.SendChatPresence(ctx, v.Info.Chat, types.ChatPresencePaused, types.ChatPresenceMediaText)
 	sendCleanReply(client, v.Info.Chat, v.Info.ID, aiResponse)
 	
+	// Save AI Reply
 	key := fmt.Sprintf(KeyChatHistory, botID, chatID)
 	rdb.RPush(ctx, key, "Me: "+aiResponse)
 	
 	fmt.Printf("🚀 [SENT] %s\n", aiResponse)
 	
+	// 👋 GO OFFLINE (After 15s)
 	go func() {
-		time.Sleep(10 * time.Second)
+		time.Sleep(15 * time.Second)
 		client.SendPresence(context.Background(), types.PresenceUnavailable)
 	}()
+}
+
+// 🛡️ HELPER: Wait while checking for Owner Interruption
+func waitAndCheckOwner(ctx context.Context, chatID string, seconds int) bool {
+	for i := 0; i < seconds; i++ {
+		// Check Redis for recent owner message
+		lastOwnerMsgStr, _ := rdb.Get(ctx, fmt.Sprintf(KeyLastOwnerMsg, chatID)).Result()
+		if lastOwnerMsgStr != "" {
+			var lastOwnerMsg int64
+			fmt.Sscanf(lastOwnerMsgStr, "%d", &lastOwnerMsg)
+			// اگر ابھی (پچھلے 5 سیکنڈ میں) اونر نے میسج کیا ہے
+			if time.Now().Unix() - lastOwnerMsg < 5 {
+				fmt.Println("🛑 [INTERRUPT] Owner is typing/replying! AI Aborting.")
+				return true // Stop everything
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return false
 }
 
 // 🧬 CLONE ENGINE
@@ -307,14 +324,13 @@ func generateCloneReply(botID, chatID, currentMsg, senderName string) string {
 
 	fullPrompt := fmt.Sprintf(`
 You are "Me" (The Owner). You are chatting with "%s".
-Reply EXACTLY like "Me" based on the history.
+Your task is to reply EXACTLY like I would.
 
-INSTRUCTIONS:
-1. **ANALYZE HISTORY:** Copy the tone (Funny/Rude/Short).
-2. **IGNORE GENERIC AI RULES:** Be human.
-3. **CLOSER:** Try to end the conversation if that's the trend.
-4. **NO ROBOTIC TALK:** Never say "How can I help?".
-5. **VOICE:** If input is [Voice Message], reply to context.
+GUIDELINES:
+1. **Mimic Tone:** Look at the history. Am I funny? Rude? Short? Copy that.
+2. **Context:** If the user sent a voice message (marked as [Voice Message]), assume context from previous texts or reply generally like "Han sahi keh rahy ho" or "Samajh ni ayi".
+3. **Short & Real:** Don't write essays. Use Roman Urdu/English mix.
+4. **Closing:** Don't drag the chat. If it's ending, let it end (e.g., "Ok", "Han").
 
 HISTORY:
 %s
