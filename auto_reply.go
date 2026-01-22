@@ -24,11 +24,9 @@ const (
 	KeyStickyOnline  = "autoai:sticky_online:%s"
 )
 
-// 🕵️ HELPER: Get BEST Name
+// ... (GetSenderName and GetAllSenderIdentifiers functions remain same) ...
 func GetSenderName(client *whatsmeow.Client, v *events.Message) string {
-	if v.Info.PushName != "" {
-		return v.Info.PushName
-	}
+	if v.Info.PushName != "" { return v.Info.PushName }
 	ctx := context.Background()
 	if contact, err := client.Store.Contacts.GetContact(ctx, v.Info.Sender); err == nil && contact.Found {
 		if contact.FullName != "" { return contact.FullName }
@@ -37,11 +35,9 @@ func GetSenderName(client *whatsmeow.Client, v *events.Message) string {
 	return v.Info.Sender.User 
 }
 
-// 🕵️ HELPER: Get ALL Identifiers
 func GetAllSenderIdentifiers(client *whatsmeow.Client, v *events.Message) []string {
 	identifiers := []string{}
 	if v.Info.PushName != "" { identifiers = append(identifiers, v.Info.PushName) }
-	
 	ctx := context.Background()
 	if contact, err := client.Store.Contacts.GetContact(ctx, v.Info.Sender); err == nil && contact.Found {
 		if contact.FullName != "" { identifiers = append(identifiers, contact.FullName) }
@@ -51,21 +47,15 @@ func GetAllSenderIdentifiers(client *whatsmeow.Client, v *events.Message) []stri
 	return identifiers
 }
 
-// 🕵️ HELPER: Extract Audio Message (Deep Search)
+// 🕵️ HELPER: Deep Audio Search
 func GetAudioFromMessage(msg *waProto.Message) *waProto.AudioMessage {
 	if msg == nil { return nil }
 	if msg.AudioMessage != nil { return msg.AudioMessage }
-	// Check inside Ephemeral (Disappearing Messages)
 	if msg.EphemeralMessage != nil && msg.EphemeralMessage.Message != nil {
-		if msg.EphemeralMessage.Message.AudioMessage != nil {
-			return msg.EphemeralMessage.Message.AudioMessage
-		}
+		if msg.EphemeralMessage.Message.AudioMessage != nil { return msg.EphemeralMessage.Message.AudioMessage }
 	}
-	// Check inside ViewOnce
 	if msg.ViewOnceMessage != nil && msg.ViewOnceMessage.Message != nil {
-		if msg.ViewOnceMessage.Message.AudioMessage != nil {
-			return msg.ViewOnceMessage.Message.AudioMessage
-		}
+		if msg.ViewOnceMessage.Message.AudioMessage != nil { return msg.ViewOnceMessage.Message.AudioMessage }
 	}
 	return nil
 }
@@ -89,7 +79,7 @@ func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string
 		}
 
 		text := ""
-		audioMsg := GetAudioFromMessage(v.Message) // 🔥 Deep Search
+		audioMsg := GetAudioFromMessage(v.Message)
 
 		if audioMsg != nil {
 			data, err := client.Download(ctx, audioMsg)
@@ -115,13 +105,12 @@ func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string
 	}()
 }
 
-// 🚀 2. COMMAND HANDLER
+// ... (HandleAutoAICmd remains same) ...
 func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string) {
 	if len(args) == 0 {
 		sendCleanReply(client, v.Info.Chat, v.Info.ID, "⚠️ Usage: .autoai set <Name>")
 		return
 	}
-
 	ctx := context.Background()
 	switch strings.ToLower(args[0]) {
 	case "set":
@@ -143,7 +132,7 @@ func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string)
 	}
 }
 
-// 🧠 3. MAIN CHECKER (DEEP VOICE CHECK)
+// 🧠 3. MAIN CHECKER
 func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 	if time.Since(v.Info.Timestamp) > 60*time.Second { return false }
 	if v.Info.IsFromMe { return false }
@@ -173,14 +162,6 @@ func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 	if matchedTarget != "" {
 		fmt.Printf("\n🔔 [AI MATCH] Target: %s | ID: %v\n", matchedTarget, identifiers)
 		
-		// 🔥🔥🔥 RAW VOICE DEBUG 🔥🔥🔥
-		audioMsg := GetAudioFromMessage(v.Message)
-		if audioMsg != nil {
-			fmt.Printf("🎤 [DEEP CHECK] Voice Message Found! (Sec: %d)\n", audioMsg.GetSeconds())
-		} else {
-			fmt.Println("📝 [DEEP CHECK] Text Message Found.")
-		}
-
 		lastOwnerMsgStr, _ := rdb.Get(ctx, fmt.Sprintf(KeyLastOwnerMsg, chatID)).Result()
 		if lastOwnerMsgStr != "" {
 			var lastOwnerMsg int64
@@ -203,6 +184,7 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 	ctx := context.Background()
 	chatID := v.Info.Chat.String()
 	
+	// Timing Logic
 	lastTimeStr, _ := rdb.Get(ctx, fmt.Sprintf(KeyLastMsgTime, chatID)).Result()
 	var lastTime int64
 	if lastTimeStr != "" { fmt.Sscanf(lastTimeStr, "%d", &lastTime) }
@@ -213,6 +195,7 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 	timeDiff := currentTime - lastTime
 	isActiveChat := timeDiff < 60 
 
+	// Online Handling
 	if !isActiveChat {
 		waitTime := 8 + rand.Intn(5)
 		fmt.Printf("🐢 Cold Start. Waiting %ds...\n", waitTime)
@@ -226,17 +209,23 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 	go keepOnlineSmart(client, v.Info.Chat, chatID)
 
 	userText := ""
-	audioMsg := GetAudioFromMessage(v.Message) // 🔥 Deep Search Here Too
+	audioMsg := GetAudioFromMessage(v.Message)
 	
+	// 🎤 Voice Processing
 	if audioMsg != nil {
 		duration := int(audioMsg.GetSeconds())
 		if duration == 0 { duration = 5 }
 
 		fmt.Printf("🎤 Processing Voice (%ds)...\n", duration)
+		
+		// 1. Mark Read (Blue Tick & Played)
+		// MarkRead سے عام بلیو ٹک ہوتا ہے، لیکن وائس کے لیے یہ کبھی کبھی مائیک بلیو کر دیتا ہے
 		client.MarkRead(ctx, []types.MessageID{v.Info.ID}, v.Info.Timestamp, v.Info.Chat, v.Info.Sender)
 		
+		// 2. Listen Delay
 		if interrupted := waitAndCheckOwner(ctx, chatID, duration); interrupted { return }
 
+		// 3. Transcribe
 		fmt.Println("🔄 Transcribing...")
 		data, err := client.Download(ctx, audioMsg)
 		if err == nil {
@@ -247,6 +236,7 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 			userText = "[Unclear Voice Message]"
 		}
 	} else {
+		// 📝 Text Processing
 		userText = v.Message.GetConversation()
 		if userText == "" { userText = v.Message.GetExtendedTextMessage().GetText() }
 

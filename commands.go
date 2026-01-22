@@ -194,44 +194,46 @@ func canExecute(client *whatsmeow.Client, v *events.Message, cmd string) bool {
 
 // ⚡ MAIN MESSAGE PROCESSOR (FULL & OPTIMIZED)
 func processMessage(client *whatsmeow.Client, v *events.Message) {
-	// 🛡️ 1. Panic Recovery (System Safeguard)
+	// 🛡️ 1. Panic Recovery
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Printf("⚠️ Critical Panic in ProcessMessage: %v\n", r)
 		}
 	}()
 
-	// ⚡ 2. Timestamp Check (Relaxed to 60s)
+	// ⚡ 2. Timestamp Check
 	if time.Since(v.Info.Timestamp) > 60*time.Second {
 		return
 	}
 
-	// ⚡ 3. Basic Text Extraction
+	// ⚡ 3. Text & Type Extraction
 	bodyRaw := getText(v.Message)
-	if bodyRaw == "" {
+	isAudio := v.Message.GetAudioMessage() != nil // 🔥 Check if it's Audio
+
+	// 🛑 CRITICAL FIX: اگر ٹیکسٹ خالی ہے لیکن آڈیو ہے، تو اسے مت روکو!
+	if bodyRaw == "" && !isAudio {
 		if v.Info.Chat.String() != "status@broadcast" {
-			return
+			return // صرف تب روکو جب نہ ٹیکسٹ ہو اور نہ آڈیو
 		}
 	}
 	bodyClean := strings.TrimSpace(bodyRaw)
 
 	// =========================================================
-	// 🔥 AI & HISTORY LOGIC (Moved to Top)
+	// 🔥 AI & HISTORY LOGIC
 	// =========================================================
 
-	// ⚡ Bot ID Setup (یہ سب سے پہلے چاہیے)
 	rawBotID := client.Store.ID.User
 	botID := strings.TrimSuffix(strings.Split(rawBotID, ":")[0], "@s.whatsapp.net")
 
-	// 🔥 1. RECORD EVERYTHING (History Building)
-	// یہ لائن ہر میسج کو محفوظ کرے گی تاکہ AI ٹرین ہو سکے
+	// 🔥 1. Record History (Text & Voice)
 	RecordChatHistory(client, v, botID)
 
-	// 🔥 2. AUTO AI REPLY CHECK
-	// اگر AI جواب دے رہا ہے تو فنکشن یہیں رک جائے گا
+	// 🔥 2. AUTO AI REPLY CHECK (Priority High)
 	if CheckAndHandleAutoReply(client, v) {
 		return
 	}
+
+    // ... باقی کوڈ ویسا ہی رہنے دیں ...
 
 	// =========================================================
 	// 🛡️ 4. IMMEDIATE ANTI-BUG PROTECTION (Private Chats Only)
