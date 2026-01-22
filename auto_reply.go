@@ -26,7 +26,7 @@ const (
 	KeyLastActivity  = "autoai:last_activity:%s"
 )
 
-// 🕵️ HELPER: Get Message Type (Text, Audio, Media)
+// 🕵️ HELPER: Get Message Type
 func GetMessageType(msg *waProto.Message) string {
 	if msg == nil { return "unknown" }
 	if msg.AudioMessage != nil { return "audio" }
@@ -52,10 +52,9 @@ func GetAudioDuration(msg *waProto.Message) int {
 	}
 
 	if audio != nil {
-		// WhatsApp sends duration in seconds in the protocol
 		seconds := int(audio.GetSeconds())
 		if seconds > 0 { return seconds }
-		return 5 // Fallback default if 0
+		return 3 // Default fallback
 	}
 	return 0
 }
@@ -103,12 +102,14 @@ func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string
 	ctx := context.Background()
 	chatID := v.Info.Chat.String()
 	
-	// Stickiness Update
-	rdb.Set(ctx, fmt.Sprintf(KeyLastActivity, chatID), time.Now().Unix(), 0)
-
+	// IMPORTANT: Do NOT update activity here, it breaks cold start logic
+	// Only record the message content
+	
 	go func() {
 		if v.Info.IsFromMe {
 			rdb.Set(ctx, fmt.Sprintf(KeyLastOwnerMsg, chatID), time.Now().Unix(), 0)
+			// If Owner replies, we DO update activity so bot stays online
+			rdb.Set(ctx, fmt.Sprintf(KeyLastActivity, chatID), time.Now().Unix(), 0)
 		}
 
 		senderName := "Me"
@@ -212,61 +213,68 @@ func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 	return false
 }
 
-// 🤖 4. AI ENGINE (HUMAN BEHAVIOR LOGIC)
+// 🤖 4. AI ENGINE (CORRECTED HUMAN LOGIC)
 func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName string) {
 	ctx := context.Background()
 	chatID := v.Info.Chat.String()
 	
-	// --- A. ANALYZE STATE (COLD vs ACTIVE) ---
+	// --- A. ANALYZE STATE (FIXED) ---
+	// 1. Get OLD time first
 	lastActivityStr, _ := rdb.Get(ctx, fmt.Sprintf(KeyLastActivity, chatID)).Result()
 	var lastActivity int64
 	if lastActivityStr != "" { fmt.Sscanf(lastActivityStr, "%d", &lastActivity) }
 	
 	currentTime := time.Now().Unix()
+	
+	// 2. Check if Cold Start (Before updating time)
 	isColdStart := (currentTime - lastActivity) > 120 // 2 Minutes Silence
-
-	// Reset Timer (Keep Online for next 2 mins)
-	rdb.Set(ctx, fmt.Sprintf(KeyLastActivity, chatID), currentTime, 0)
-	go keepOnlineSmart(client, chatID)
 
 	// --- B. COLD START DELAY ---
 	if isColdStart {
+		// DO NOT COME ONLINE YET
 		delay := 10 + rand.Intn(3) // 10-12 Seconds
-		fmt.Printf("💤 [COLD START] Waiting %ds before coming online...\n", delay)
+		fmt.Printf("💤 [COLD START] Waiting %ds before touching phone...\n", delay)
+		
+		// Wait offline
 		if interrupted := waitAndCheckOwner(ctx, chatID, delay); interrupted { return }
 	} else {
-		fmt.Println("🔥 [ACTIVE MODE] Instant Response.")
+		fmt.Println("🔥 [ACTIVE MODE] Instant Pickup.")
+		time.Sleep(1 * time.Second) // Tiny human jitter
 	}
 
-	// --- C. COME ONLINE & MARK READ (ALL MEDIA) ---
+	// --- C. NOW COME ONLINE & READ ---
+	// Start sticky online background task
+	go keepOnlineSmart(client, chatID)
+	// Update activity time NOW (after delay logic is done)
+	rdb.Set(ctx, fmt.Sprintf(KeyLastActivity, chatID), currentTime, 0)
+
 	client.SendPresence(ctx, types.PresenceAvailable)
 	
-	// Mark EVERYTHING as Read (Stickers, Images, Audio, Text)
+	// Mark EVERYTHING as Read (Blue Ticks) - First Step
 	client.MarkRead(ctx, []types.MessageID{v.Info.ID}, time.Now(), v.Info.Chat, v.Info.Sender, types.ReceiptTypeRead)
 	fmt.Println("👀 [SEEN] Sent Blue Ticks.")
 
-	// --- D. ANALYZE CONTENT & WAIT ---
+	// --- D. PROCESSING (LISTENING/READING) ---
 	msgType := GetMessageType(v.Message)
 	userText := ""
 	
 	if msgType == "media" {
-		// Just read stickers/images, wait a bit, then exit (or reply if you want)
 		fmt.Println("🖼️ [MEDIA] Viewed media.")
-		time.Sleep(2 * time.Second) 
-		return // User said: "In pe reply chahe na de but read kare"
+		time.Sleep(3 * time.Second) 
+		return 
 	} else if msgType == "audio" {
-		// 🎤 AUDIO LOGIC
+		// 🎤 AUDIO LOGIC (FIXED)
 		audioSec := GetAudioDuration(v.Message)
 		fmt.Printf("🎤 [VOICE] Duration: %ds. Listening...\n", audioSec)
 		
-		// Wait exact duration
+		// 1. Wait while "Listening" (Blue Ticks are already sent)
 		if interrupted := waitAndCheckOwner(ctx, chatID, audioSec); interrupted { return }
 		
-		// SEND BLUE MIC (Played)
+		// 2. SEND BLUE MIC (Played) - AFTER Listening
 		client.MarkRead(ctx, []types.MessageID{v.Info.ID}, time.Now(), v.Info.Chat, v.Info.Sender, types.ReceiptTypePlayed)
 		fmt.Println("🔵 [PLAYED] Sent Blue Mic.")
 
-		// Transcribe
+		// 3. Transcribe
 		audioMsg := GetAudioFromMessage(v.Message)
 		data, err := client.Download(ctx, audioMsg)
 		if err == nil {
@@ -282,8 +290,8 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 		readDelay := int(math.Ceil(float64(wordCount) / 4.0)) 
 		if readDelay < 1 { readDelay = 1 }
 		
-		// If Active Mode, make reading very fast
-		if !isColdStart && readDelay > 2 { readDelay = 2 }
+		// Make reading faster if active chat
+		if !isColdStart && readDelay > 3 { readDelay = 3 }
 
 		fmt.Printf("👀 [READING] Delay: %ds\n", readDelay)
 		if interrupted := waitAndCheckOwner(ctx, chatID, readDelay); interrupted { return }
@@ -299,14 +307,17 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 	aiResponse := generateCloneReply(botID, chatID, userText, senderName, msgType)
 	if aiResponse == "" { return }
 
-	// --- F. TYPING SIMULATION ---
+	// --- F. TYPING SIMULATION (FIXED SPEED) ---
 	client.SendChatPresence(ctx, v.Info.Chat, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 	
-	typingSec := len(aiResponse) / 10 // Normal speed
-	if !isColdStart { typingSec = len(aiResponse) / 15 } // Faster in active chat
+	// Speed Calculation
+	respLen := len(aiResponse)
+	typingSec := respLen / 10 // Normal speed
+	if !isColdStart { typingSec = respLen / 15 } // Faster
 	
+	// Safety Caps (Fixing the 1 minute delay issue)
 	if typingSec < 2 { typingSec = 2 }
-	if typingSec > 10 { typingSec = 10 } // Cap max typing time
+	if typingSec > 12 { typingSec = 12 } // NEVER wait more than 12 seconds to type
 
 	fmt.Printf("✍️ [TYPING] Duration: %ds\n", typingSec)
 	if interrupted := waitAndCheckOwner(ctx, chatID, typingSec); interrupted { 
@@ -321,7 +332,7 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 	key := fmt.Sprintf(KeyChatHistory, botID, chatID)
 	rdb.RPush(ctx, key, "Me: "+aiResponse)
 	
-	// Keep session alive
+	// Reset Activity to keep session alive
 	rdb.Set(ctx, fmt.Sprintf(KeyLastActivity, chatID), time.Now().Unix(), 0)
 }
 
