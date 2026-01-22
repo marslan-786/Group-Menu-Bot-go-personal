@@ -16,7 +16,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// 💾 Redis Keys
 const (
 	KeyAutoAITargets = "autoai:targets_set"
 	KeyChatHistory   = "chat:history:%s:%s" 
@@ -25,7 +24,7 @@ const (
 	KeyStickyOnline  = "autoai:sticky_online:%s"
 )
 
-// 🕵️ HELPER: GET BEST NAME
+// 🕵️ HELPER: Get BEST Name
 func GetSenderName(client *whatsmeow.Client, v *events.Message) string {
 	if v.Info.PushName != "" {
 		return v.Info.PushName
@@ -35,7 +34,21 @@ func GetSenderName(client *whatsmeow.Client, v *events.Message) string {
 		if contact.FullName != "" { return contact.FullName }
 		if contact.PushName != "" { return contact.PushName }
 	}
-	return v.Info.Sender.User // Last resort: Phone Number
+	return v.Info.Sender.User 
+}
+
+// 🕵️ HELPER: Get ALL Identifiers for Matching
+func GetAllSenderIdentifiers(client *whatsmeow.Client, v *events.Message) []string {
+	identifiers := []string{}
+	if v.Info.PushName != "" { identifiers = append(identifiers, v.Info.PushName) }
+	
+	ctx := context.Background()
+	if contact, err := client.Store.Contacts.GetContact(ctx, v.Info.Sender); err == nil && contact.Found {
+		if contact.FullName != "" { identifiers = append(identifiers, contact.FullName) }
+		if contact.PushName != "" { identifiers = append(identifiers, contact.PushName) }
+	}
+	identifiers = append(identifiers, v.Info.Sender.User) // Phone Number
+	return identifiers
 }
 
 // 📝 1. HISTORY RECORDER
@@ -109,10 +122,22 @@ func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string)
 	}
 }
 
-// 🧠 3. MAIN CHECKER (RAW DEBUGGER ENABLED)
+// 🧠 3. MAIN CHECKER (GLOBAL RAW VOICE DEBUG)
 func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 	if time.Since(v.Info.Timestamp) > 60*time.Second { return false }
 	if v.Info.IsFromMe { return false }
+
+	// 🔥🔥🔥 GLOBAL RAW VOICE DEBUG (FOR ANY USER) 🔥🔥🔥
+	if v.Message.GetAudioMessage() != nil {
+		fmt.Println("\n🎤🎤🎤 [GLOBAL VOICE DEBUG] AUDIO RECEIVED 🎤🎤🎤")
+		fmt.Printf("   From JID: %s\n", v.Info.Sender.String())
+		fmt.Printf("   PushName: '%s'\n", v.Info.PushName)
+		fmt.Printf("   Broadcast: %v | Group: %v\n", v.Info.BroadcastListOwner, v.Info.IsGroup)
+		
+		// Print Full Raw Struct
+		fmt.Printf("👇 RAW STRUCT 👇\n%+v\n👆 RAW STRUCT 👆\n", v.Message)
+	}
+	// 🔥🔥🔥 END DEBUG 🔥🔥🔥
 
 	ctx := context.Background()
 	chatID := v.Info.Chat.String()
@@ -122,44 +147,24 @@ func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 	targets, err := rdb.SMembers(ctx, KeyAutoAITargets).Result()
 	if err != nil || len(targets) == 0 { return false }
 
-	incomingName := GetSenderName(client, v)
-	
-	// Check Match
+	identifiers := GetAllSenderIdentifiers(client, v)
 	matchedTarget := ""
-	incomingLower := strings.ToLower(incomingName)
-	for _, t := range targets {
-		if strings.Contains(incomingLower, strings.ToLower(strings.TrimSpace(t))) {
-			matchedTarget = t
-			break
+	
+	// Match Logic
+	for _, id := range identifiers {
+		idLower := strings.ToLower(strings.TrimSpace(id))
+		for _, t := range targets {
+			if strings.Contains(idLower, strings.ToLower(strings.TrimSpace(t))) {
+				matchedTarget = t
+				break
+			}
 		}
+		if matchedTarget != "" { break }
 	}
 
 	if matchedTarget != "" {
-		// =================================================================
-		// 🚧 🚧 🚧 RAW DATA JUGAD LOGGING (ONLY FOR TARGET) 🚧 🚧 🚧
-		// =================================================================
-		fmt.Printf("\n🔥🔥🔥 [TARGET HIT] Match: %s | User: %s 🔥🔥🔥\n", matchedTarget, incomingName)
-		fmt.Println("👇👇👇 [RAW MESSAGE DATA START] 👇👇👇")
+		fmt.Printf("\n🔔 [AI MATCH] Target: %s | ID: %v\n", matchedTarget, identifiers)
 		
-		// Print the Raw Struct
-		fmt.Printf("%+v\n", v.Message)
-
-		// Specific Check for Audio
-		if audio := v.Message.GetAudioMessage(); audio != nil {
-			fmt.Println("------------------------------------------------")
-			fmt.Println("🎤 [AUDIO DETECTED IN RAW]")
-			fmt.Printf("   Seconds: %d\n", audio.GetSeconds())
-			fmt.Printf("   Mimetype: %s\n", audio.GetMimetype())
-			fmt.Printf("   PTT: %v\n", audio.GetPTT())
-			fmt.Println("------------------------------------------------")
-		} else {
-			fmt.Println("❌ [NO AUDIO] v.Message.GetAudioMessage() is NIL")
-		}
-		
-		fmt.Println("👆👆👆 [RAW MESSAGE DATA END] 👆👆👆\n")
-		// =================================================================
-
-		// Check Owner Status
 		lastOwnerMsgStr, _ := rdb.Get(ctx, fmt.Sprintf(KeyLastOwnerMsg, chatID)).Result()
 		if lastOwnerMsgStr != "" {
 			var lastOwnerMsg int64
@@ -170,7 +175,7 @@ func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 			}
 		}
 
-		go processAIResponse(client, v, incomingName)
+		go processAIResponse(client, v, identifiers[0]) 
 		return true 
 	}
 
@@ -192,7 +197,6 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 	timeDiff := currentTime - lastTime
 	isActiveChat := timeDiff < 60 
 
-	// Online Handling
 	if !isActiveChat {
 		waitTime := 8 + rand.Intn(5)
 		fmt.Printf("🐢 Cold Start. Waiting %ds...\n", waitTime)
@@ -207,7 +211,6 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 
 	userText := ""
 	
-	// 🎤 Voice Processing
 	if v.Message.GetAudioMessage() != nil {
 		duration := int(v.Message.GetAudioMessage().GetSeconds())
 		if duration == 0 { duration = 5 }

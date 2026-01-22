@@ -83,23 +83,66 @@ func ListenForFeatures(client *whatsmeow.Client, evt interface{}) {
 			return
 		}
 
-		// 🎤 --- C: AI VOICE LISTENER (SELF-CHAT ENABLED) ---
-		// ✅ تبدیلی 1: وائس میسج چیک
+		// 🎤 --- C: AI VOICE LISTENER (UPDATED) ---
 		if v.Message.AudioMessage != nil {
+			
+			senderID := v.Info.Sender.ToNonAD().String()
+			
+			// 🔥🔥🔥 FIX START: AUTO-AI TARGET CHECK 🔥🔥🔥
+			// سب سے پہلے چیک کریں کہ کیا یہ "Auto-AI Target" ہے؟
+			// اگر ہاں، تو پرانے سسٹم کو کہیں کہ "تم دخل نہ دو"، نیا سسٹم (auto_reply.go) اسے خود سنبھال لے گا۔
+			
+			ctx := context.Background()
+			targets, _ := rdb.SMembers(ctx, "autoai:targets_set").Result()
+			
+			// نام اور نمبر دونوں چیک کریں
+			senderName := ""
+			if v.Info.PushName != "" {
+				senderName = v.Info.PushName
+			} else {
+				// اگر پش نیم نہیں ہے تو کانٹیکٹ سے نکالیں
+				if contact, err := client.Store.Contacts.GetContact(ctx, v.Info.Sender); err == nil && contact.Found {
+					senderName = contact.FullName
+					if senderName == "" { senderName = contact.PushName }
+				}
+			}
+			
+			isTarget := false
+			senderNameLower := strings.ToLower(senderName)
+			
+			for _, t := range targets {
+				tLower := strings.ToLower(strings.TrimSpace(t))
+				// نام میچ کریں
+				if senderName != "" && strings.Contains(senderNameLower, tLower) {
+					isTarget = true
+					break
+				}
+				// اگر نام نہیں ملا تو نمبر میچ کریں (Backup)
+				if strings.Contains(senderID, tLower) {
+					isTarget = true
+					break
+				}
+			}
 
-			// شرط 2: کیا یہ رپلائی ہے؟ (ContextInfo check)
+			if isTarget {
+				// ✅ یہ ٹارگٹ ہے! اسے پرانے فنکشن سے بچا لیں
+				fmt.Printf("🎤 [PASS-THROUGH] Auto-AI Voice from '%s' detected! Letting Auto-AI handle it.\n", senderName)
+				return // <--- یہ ریٹرن بہت ضروری ہے تاکہ نیچے والا 'Ignored' کوڈ نہ چلے
+			}
+			// 🔥🔥🔥 FIX END 🔥🔥🔥
+
+
+			// --- OLD LEGACY VOICE LOGIC (For .gpt command users) ---
 			ctxInfo := v.Message.AudioMessage.ContextInfo
 			if ctxInfo != nil && ctxInfo.StanzaID != nil {
 
 				replyToID := *ctxInfo.StanzaID
-				senderID := v.Info.Sender.ToNonAD().String()
 
 				// 🔍 DEBUG PRINT
-				fmt.Println("\n🎙️  Audio Reply Detected!")
+				fmt.Println("\n🎙️  Audio Reply Detected (Legacy Check)!")
 				fmt.Println("    ├─ Sender:", senderID)
 				fmt.Println("    └─ Reply To ID:", replyToID)
 
-				// شرط 3: Redis سے AI سیشن چیک کریں
 				if rdb != nil {
 					key := "ai_session:" + senderID
 					val, err := rdb.Get(context.Background(), key).Result()
@@ -108,8 +151,6 @@ func ListenForFeatures(client *whatsmeow.Client, evt interface{}) {
 						var session AISession
 						json.Unmarshal([]byte(val), &session)
 
-						// 🔥🔥🔥 UPDATED LOGIC: CHECK LIST OF IDs 🔥🔥🔥
-						// اب ہم صرف آخری میسج نہیں، بلکہ لسٹ چیک کر رہے ہیں
 						isMatch := false
 						for _, id := range session.MessageIDs {
 							if id == replyToID {
@@ -118,15 +159,15 @@ func ListenForFeatures(client *whatsmeow.Client, evt interface{}) {
 							}
 						}
 
-						// 🎯 اگر میچ مل گیا
 						if isMatch {
-							fmt.Println("    ✅ SESSION MATCHED! Forwarding to AI Engine...")
+							fmt.Println("    ✅ SESSION MATCHED! Forwarding to Legacy AI Engine...")
 							go HandleVoiceMessage(client, v)
 						} else {
-							fmt.Println("    ⚠️ Ignored: Reply ID not found in AI history.")
+							fmt.Println("    ⚠️ Ignored: Reply ID not found in Legacy AI history.")
 						}
 					} else {
-						fmt.Println("    ⚠️ Ignored: No active AI session found for this user.")
+						// یہ ایرر اب ٹارگٹ یوزرز کے لیے نہیں آئے گا
+						fmt.Println("    ⚠️ Ignored: No active Legacy AI session found.")
 					}
 				}
 			}
@@ -134,12 +175,10 @@ func ListenForFeatures(client *whatsmeow.Client, evt interface{}) {
 
 		// --- B: ANTI-DELETE LOGIC (Personal Chats Only) ---
 		if !v.Info.IsGroup && !v.Info.IsFromMe {
-
 			if v.Message.GetProtocolMessage() == nil {
 				saveMsgToDB(v)
 				return
 			}
-
 			if v.Message.GetProtocolMessage() != nil &&
 				v.Message.GetProtocolMessage().GetType() == waProto.ProtocolMessage_REVOKE {
 				HandleAntiDeleteSystem(client, v)
