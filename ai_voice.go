@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -21,9 +22,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+
+
 // ⚙️ SETTINGS
 const PY_SERVER = "http://localhost:5000"
-const REMOTE_VOICE_URL = "https://real-voice-2-production.up.railway.app/speak"
+const REMOTE_VOICE_URL = "https://real-voice-production.up.railway.app/speak"
 
 func KeepServerAlive() {
 	ticker := time.NewTicker(2 * time.Minute)
@@ -166,9 +169,11 @@ func requestVoiceServer(url string, text string, speakerFile string) ([]byte, er
 
 func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, string) {
 	ctx := context.Background()
-	
+
+	// 1. History Load Karna
 	history := GetAIHistory(senderID)
 
+	// 2. Keys Gather Karna (Backup ke liye)
 	var validKeys []string
 	if mainKey := os.Getenv("GOOGLE_API_KEY"); mainKey != "" {
 		validKeys = append(validKeys, mainKey)
@@ -179,33 +184,77 @@ func GetGeminiVoiceResponseWithHistory(query string, senderID string) (string, s
 		}
 	}
 
+	// 3. Prompt Tayyar Karna (Yehi prompt Custom API aur Gemini dono ko jayega)
+	// Taa ke Voice ka script (Hindi/Devanagari) kharab na ho.
+	systemPrompt := fmt.Sprintf(`System: You are a deeply caring friend.
+	🔴 VOICE MODE RULES:
+	1. **Script:** ALWAYS HINDI (Devanagari) for correct pronunciation.
+	2. **Language:** Pure Urdu spoken style.
+	3. **Tone:** Casual, loving ('Yaar', 'Jaan').
+	4. **ADAPTIVE LENGTH:**
+	   - **Casual Chat:** Keep it SHORT (1-2 sentences). e.g., "Main theek hun, tum sunao?"
+	   - **Special Request:** If user asks for a Poem (Sher), Story, or Explanation, you CAN be longer (3-4 sentences max).
+	   - Do not preach unless asked.
+	
+	Chat History: %s
+	User Voice: "%s"`, history, query)
+
+	// =================================================================
+	// 🚀 STEP 1: TRY CUSTOM API FIRST (Railway)
+	// =================================================================
+	customURL := os.Getenv("CUSTOM_API_URL")
+	if customURL == "" {
+		// Agar env me nahi hai to hardcoded use karega
+		customURL = "https://gemini-api-production-b665.up.railway.app/chat"
+	}
+
+	// Prompt ko URL safe banana
+	encodedPrompt := url.QueryEscape(systemPrompt)
+	apiReqURL := fmt.Sprintf("%s?message=%s", customURL, encodedPrompt)
+
+	// API Request Bhejna
+	apiClient := &http.Client{Timeout: 90 * time.Second} // Voice ke liye thora time zyada dia hai
+	resp, err := apiClient.Get(apiReqURL)
+
+	if err == nil && resp.StatusCode == 200 {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+
+		// Response Struct
+		var apiResp struct {
+			Response string `json:"response"`
+			Status   string `json:"status"`
+		}
+
+		// JSON Parse aur Success Check
+		if json.Unmarshal(body, &apiResp) == nil && apiResp.Status == "success" {
+			fmt.Println("✅ Voice Generated via Custom API (Hindi Script)!")
+			return apiResp.Response, ""
+		}
+	} else {
+		fmt.Printf("⚠️ Custom API Failed for Voice (%v). Switching to Backup Keys...\n", err)
+	}
+
+	// =================================================================
+	// 🚀 STEP 2: FALLBACK TO GEMINI (Original Loop - 1 to 50 Keys)
+	// =================================================================
 	for i, key := range validKeys {
 		client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: key})
 		if err != nil {
 			continue
 		}
 
-		// 🔥🔥🔥 VOICE AI PROMPT (Adaptive Length) 🔥🔥🔥
-		systemPrompt := fmt.Sprintf(`System: You are a deeply caring friend.
-		🔴 VOICE MODE RULES:
-		1. **Script:** ALWAYS HINDI (Devanagari) for correct pronunciation.
-		2. **Language:** Pure Urdu spoken style.
-		3. **Tone:** Casual, loving ('Yaar', 'Jaan').
-		4. **ADAPTIVE LENGTH:**
-		   - **Casual Chat:** Keep it SHORT (1-2 sentences). e.g., "Main theek hun, tum sunao?"
-		   - **Special Request:** If user asks for a Poem (Sher), Story, or Explanation, you CAN be longer (3-4 sentences max).
-		   - Do not preach unless asked.
-		
-		Chat History: %s
-		User Voice: "%s"`, history, query)
-
+		// Wohi Hindi script wala prompt bhej rahe hain
 		resp, err := client.Models.GenerateContent(ctx, "gemini-2.5-flash", genai.Text(systemPrompt), nil)
 		if err != nil {
 			fmt.Printf("❌ Key #%d Failed. Switching...\n", i+1)
 			continue
 		}
+		
+		fmt.Printf("✅ Voice Generated via Gemini Key #%d\n", i+1)
 		return resp.Text(), ""
 	}
+
 	return "نیٹ ورک کا مسئلہ ہے۔", ""
 }
 
