@@ -20,16 +20,17 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// 🧠 1. MAIN AI FUNCTION (Command Handler)
+// 🧠 1. MAIN AI FUNCTION (Command Handler - Starts Fresh)
 func handleAI(client *whatsmeow.Client, v *events.Message, query string, cmd string) {
 	if query == "" {
 		replyMessage(client, v, "⚠️ Please provide a prompt.")
 		return
 	}
+	// isReply = false (کیونکہ یہ کمانڈ ہے، اس لیے ہسٹری نہیں جائے گی)
 	processAIConversation(client, v, query, cmd, false)
 }
 
-// 🧠 2. REPLY HANDLER
+// 🧠 2. REPLY HANDLER (Continues Conversation)
 func handleAIReply(client *whatsmeow.Client, v *events.Message) bool {
 	ext := v.Message.GetExtendedTextMessage()
 	if ext == nil || ext.ContextInfo == nil || ext.ContextInfo.StanzaID == nil {
@@ -54,10 +55,7 @@ func handleAIReply(client *whatsmeow.Client, v *events.Message) bool {
 			}
 		}
 
-		if quotedText != "" {
-			userMsg = fmt.Sprintf("(Reply to: '%s') %s", quotedText, userMsg)
-		}
-
+		// isReply = true (یہاں ہسٹری ساتھ جائے گی)
 		processAIConversation(client, v, userMsg, "ai", true)
 		return true
 	}
@@ -70,7 +68,7 @@ var (
 	keyMutex     sync.Mutex
 )
 
-// Custom API ka response structure
+// Custom API Response Structure
 type CustomAPIResponse struct {
 	Response string `json:"response"`
 	Status   string `json:"status"`
@@ -89,9 +87,8 @@ func getTotalKeysCount() int {
 	return count
 }
 
-// Custom API Call Function
+// Custom API Call Function (URL Encoded Message)
 func callCustomAPI(apiURL string, prompt string) (string, error) {
-	// Query param ko encode karein
 	encodedPrompt := url.QueryEscape(prompt)
 	fullURL := fmt.Sprintf("%s?message=%s", apiURL, encodedPrompt)
 
@@ -100,7 +97,8 @@ func callCustomAPI(apiURL string, prompt string) (string, error) {
 		return "", err
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second} // 60 sec timeout taake browser load ho sake
+	// Browser load time ke liye timeout thora ziyada rakha hai
+	client := &http.Client{Timeout: 90 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -118,7 +116,8 @@ func callCustomAPI(apiURL string, prompt string) (string, error) {
 
 	var apiResp CustomAPIResponse
 	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return "", err
+		// Agar JSON parse na ho to shayad raw text ho, usay wapis bhej do
+		return string(body), nil
 	}
 
 	if apiResp.Status == "failed" || apiResp.Error != "" {
@@ -130,33 +129,47 @@ func callCustomAPI(apiURL string, prompt string) (string, error) {
 
 func processAIConversation(client *whatsmeow.Client, v *events.Message, query string, cmd string, isReply bool) {
 	if !isReply {
-		react(client, v.Info.Chat, v.Info.ID, "🧠")
+		react(client, v.Info.Chat, v.Info.ID, "🧠") // Thinking reaction for new command
 	}
 
 	senderID := v.Info.Sender.ToNonAD().String()
-	history := GetAIHistory(senderID)
+	
+	// 🔥 HISTORY LOGIC 🔥
+	var history string
+	if isReply {
+		// اگر یہ ریپلائی ہے تو پچھلی ہسٹری نکالو (Database function should limit to 50)
+		// NOTE: Apne GetAIHistory function me "LIMIT 50" ki query zaroor check kar lena
+		history = GetAIHistory(senderID) 
+	} else {
+		// اگر کمانڈ ہے تو ہسٹری خالی (Fresh Start)
+		history = "No previous context. This is a new conversation starter."
+	}
 
-	aiName := "Impossible AI"
+	aiName := "Assistant"
 	if strings.ToLower(cmd) == "gpt" {
 		aiName = "GPT-4"
 	}
 
-	// 🔥🔥🔥 TEXT AI PROMPT (Strict Script Matching) 🔥🔥🔥
+	// 🔥🔥🔥 SMART SYSTEM PROMPT 🔥🔥🔥
+	// Is prompt me hum ne Language Mirroring aur Length Control set kia hai
 	fullPrompt := fmt.Sprintf(
-		"System: You are %s, a smart and friendly assistant.\n"+
-			"🔴 TEXT MODE RULES (STRICT):\n"+
-			"1. **DETECT SCRIPT:** Check the script of the 'User's New Message' carefully.\n"+
-			"2. **MATCH SCRIPT:** \n"+
-			"   - If User types in **ENGLISH**, reply in **ENGLISH**.\n"+
-			"   - If User types in **ROMAN URDU** (e.g., 'kese ho'), reply in **ROMAN URDU**.\n"+
-			"   - If User types in **URDU SCRIPT** (e.g., 'کیا حال ہے'), reply in **URDU SCRIPT**.\n"+
-			"3. **NO HINDI SCRIPT:** Do NOT use Devanagari script (Hindi characters) under any circumstances in text mode.\n"+
-			"4. **LENGTH:** Be natural, friendly, and detailed. No length restrictions.\n"+
+		"System: You are %s.\n"+
+			"🔴 **CRITICAL INSTRUCTIONS:**\n"+
+			"1. **LANGUAGE MIRRORING (STRICT):**\n"+
+			"   - If user speaks **ENGLISH** -> You speak **ENGLISH**.\n"+
+			"   - If user speaks **ROMAN URDU** (e.g., 'kya hal hai') -> You speak **ROMAN URDU** (e.g., 'Main theek hun').\n"+
+			"   - If user speaks **URDU SCRIPT** (e.g., 'کیا حال ہے') -> You speak **URDU SCRIPT**.\n"+
+			"   - NEVER use Hindi/Devanagari script.\n"+
+			"2. **RESPONSE LENGTH:**\n"+
+			"   - If message is a **Greeting** (Hi, Hello, Salam) -> Keep it **SHORT & SWEET** (1 line).\n"+
+			"   - If message is a **Question** -> Provide a detailed helpful answer.\n"+
+			"3. **CONTEXT:**\n"+
+			"   - Use the provided Chat History ONLY to understand context (e.g., reply-to-reply).\n"+
 			"----------------\n"+
-			"Chat History (Ignore script here, focus on context):\n%s\n"+
+			"📜 **CHAT HISTORY (Last 50 msgs):**\n%s\n"+
 			"----------------\n"+
-			"User's New Message: %s\n"+
-			"AI Response:",
+			"👤 **USER'S NEW MESSAGE:** %s\n"+
+			"🤖 **YOUR RESPONSE:**",
 		aiName, history, query)
 
 	ctx := context.Background()
@@ -165,30 +178,36 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 	var usedSource string = "CustomAPI"
 
 	// =================================================================
-	// 🚀 STEP 1: TRY CUSTOM API (Railway)
+	// 🚀 STEP 1: TRY CUSTOM API (Railway - Free Limit Saving)
 	// =================================================================
 	
-	// Yahan apni Railway wali API ka link dalein
 	customURL := os.Getenv("CUSTOM_API_URL")
 	if customURL == "" {
-		// Fallback agar env set nahi hai
 		customURL = "https://gemini-api-production-b665.up.railway.app/chat"
 	}
 
-	log.Println("🔄 Trying Custom API First...")
-	customResp, err := callCustomAPI(customURL, fullPrompt)
-	
-	if err == nil && customResp != "" {
-		finalResponse = customResp
-		log.Println("✅ Custom API Success!")
+	// Sirf tab try karo agar prompt length manageable ho (URL limit safe)
+	if len(fullPrompt) < 4000 {
+		log.Println("🔄 Trying Custom API First...")
+		customResp, err := callCustomAPI(customURL, fullPrompt)
+		
+		if err == nil && customResp != "" {
+			finalResponse = customResp
+			log.Println("✅ Custom API Success!")
+		} else {
+			log.Printf("⚠️ Custom API Failed (%v). Switching to Gemini Backup...", err)
+			usedSource = "Gemini"
+		}
 	} else {
-		log.Printf("⚠️ Custom API Failed (%v). Switching to Gemini Backup...", err)
+		log.Println("⚠️ Prompt too long for GET request. Switching directly to Gemini.")
 		usedSource = "Gemini"
-		
-		// =================================================================
-		// 🚀 STEP 2: FALLBACK TO GEMINI (Original Loop)
-		// =================================================================
-		
+	}
+
+	// =================================================================
+	// 🚀 STEP 2: FALLBACK TO GEMINI (Key Rotation Loop)
+	// =================================================================
+	
+	if finalResponse == "" {
 		totalKeys := getTotalKeysCount()
 		if totalKeys == 0 {
 			totalKeys = 1
@@ -209,8 +228,8 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 				continue
 			}
 
-			// Note: Gemini API might truncate very long prompts, handle accordingly if needed
-			result, err := genaiClient.Models.GenerateContent(ctx, "gemini-2.0-flash-exp", genai.Text(fullPrompt), nil)
+			// Flash model is faster and cheaper
+			result, err := genaiClient.Models.GenerateContent(ctx, "gemini-2.5-flash", genai.Text(fullPrompt), nil)
 
 			if err != nil {
 				lastError = err
@@ -231,12 +250,12 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 		}
 	}
 
-	// Agar dono fail ho jayen
+	// Final Error Handling
 	if finalResponse == "" {
 		if !isReply {
-			errMsg := "❌ System Overload. Custom API & All Backup Keys failed."
+			errMsg := "❌ System Overload. Please try again later."
 			if lastError != nil {
-				errMsg += fmt.Sprintf(" (Last Error: %v)", lastError)
+				errMsg += fmt.Sprintf(" (Debug: %v)", lastError)
 			}
 			replyMessage(client, v, errMsg)
 		}
@@ -256,13 +275,14 @@ func processAIConversation(client *whatsmeow.Client, v *events.Message, query st
 	})
 
 	if err == nil {
+		// Save response to DB for future context
 		SaveAIHistory(senderID, query, finalResponse, respPtr.ID)
 		if !isReply {
-			// Reaction based on source (Optional - Debugging ke liye acha hai)
+			// Reaction based on source used
 			if usedSource == "CustomAPI" {
-				react(client, v.Info.Chat, v.Info.ID, "⚡") // Fast/Custom
+				react(client, v.Info.Chat, v.Info.ID, "⚡") 
 			} else {
-				react(client, v.Info.Chat, v.Info.ID, "🐢") // Backup/Gemini
+				react(client, v.Info.Chat, v.Info.ID, "🐢") 
 			}
 		}
 	}
