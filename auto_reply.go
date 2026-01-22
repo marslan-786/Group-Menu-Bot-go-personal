@@ -24,7 +24,6 @@ import (
 // ⚙️ SETTINGS
 const CustomAPIURL = "https://gemini-api-production-b665.up.railway.app/chat"
 
-// 💾 Redis Keys
 const (
 	KeyAutoAITargets = "autoai:targets_set"
 	KeyChatHistory   = "chat:history:%s:%s" 
@@ -32,7 +31,7 @@ const (
 	KeyLastOwnerMsg  = "autoai:last_owner_msg:%s"
 	KeyStickyOnline  = "autoai:sticky_online:%s"
 	KeyLastActivity  = "autoai:last_activity:%s"
-	KeySelectedModel = "autoai:selected_model" // 1 = Gemini (Default), 2 = Custom API
+	KeySelectedModel = "autoai:selected_model" 
 )
 
 // 🕵️ HELPER: Get Message Type
@@ -45,27 +44,6 @@ func GetMessageType(msg *waProto.Message) string {
 	if msg.DocumentMessage != nil { return "media" }
 	if msg.Conversation != nil || msg.ExtendedTextMessage != nil { return "text" }
 	return "unknown"
-}
-
-// 🕵️ HELPER: Get Exact Audio Duration
-func GetAudioDuration(msg *waProto.Message) int {
-	if msg == nil { return 0 }
-	var audio *waProto.AudioMessage
-	
-	if msg.AudioMessage != nil {
-		audio = msg.AudioMessage
-	} else if msg.EphemeralMessage != nil && msg.EphemeralMessage.Message != nil {
-		audio = msg.EphemeralMessage.Message.AudioMessage
-	} else if msg.ViewOnceMessage != nil && msg.ViewOnceMessage.Message != nil {
-		audio = msg.ViewOnceMessage.Message.AudioMessage
-	}
-
-	if audio != nil {
-		seconds := int(audio.GetSeconds())
-		if seconds > 0 { return seconds }
-		return 3 
-	}
-	return 0
 }
 
 // 🕵️ HELPER: Get Audio Data
@@ -146,20 +124,16 @@ func RecordChatHistory(client *whatsmeow.Client, v *events.Message, botID string
 	}()
 }
 
-// 🚀 2. COMMAND HANDLER (UPDATED FOR MODEL SWITCHING)
+// 🚀 2. COMMAND HANDLER
 func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string) {
 	if len(args) == 0 { return }
 	ctx := context.Background()
-	
-	cmd := strings.ToLower(args[0])
-
-	switch cmd {
+	switch strings.ToLower(args[0]) {
 	case "set":
 		if len(args) < 2 { return }
 		targetName := strings.Join(args[1:], " ")
 		rdb.SAdd(ctx, KeyAutoAITargets, targetName)
 		sendCleanReply(client, v.Info.Chat, v.Info.ID, "✅ AI Active for: "+targetName)
-	
 	case "off":
 		targetName := strings.Join(args[1:], " ")
 		if strings.ToLower(targetName) == "all" {
@@ -168,16 +142,12 @@ func HandleAutoAICmd(client *whatsmeow.Client, v *events.Message, args []string)
 			rdb.SRem(ctx, KeyAutoAITargets, targetName)
 		}
 		sendCleanReply(client, v.Info.Chat, v.Info.ID, "🛑 Stopped.")
-	
 	case "list":
 		targets, _ := rdb.SMembers(ctx, KeyAutoAITargets).Result()
 		sendCleanReply(client, v.Info.Chat, v.Info.ID, fmt.Sprintf("Targets: %v", targets))
-
-	// 🔥 MODEL SWITCHING LOGIC 🔥
 	case "1":
 		rdb.Set(ctx, KeySelectedModel, "1", 0)
 		sendCleanReply(client, v.Info.Chat, v.Info.ID, "🤖 Switched to **Gemini (Model 1)**")
-	
 	case "2":
 		rdb.Set(ctx, KeySelectedModel, "2", 0)
 		sendCleanReply(client, v.Info.Chat, v.Info.ID, "🤖 Switched to **Custom API (Model 2)**")
@@ -202,7 +172,6 @@ func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 		var lastOwnerMsg int64
 		fmt.Sscanf(lastOwnerMsgStr, "%d", &lastOwnerMsg)
 		if time.Now().Unix()-lastOwnerMsg < 60 {
-			// Owner is active
 			return false
 		}
 	}
@@ -231,20 +200,22 @@ func CheckAndHandleAutoReply(client *whatsmeow.Client, v *events.Message) bool {
 	return false
 }
 
-// 🤖 4. AI ENGINE
+// 🤖 4. AI ENGINE (INSTANT VOICE + STRICT ROMAN URDU)
 func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName string) {
 	ctx := context.Background()
 	chatID := v.Info.Chat.String()
 	
+	// --- A. ANALYZE STATE ---
 	lastActivityStr, _ := rdb.Get(ctx, fmt.Sprintf(KeyLastActivity, chatID)).Result()
 	var lastActivity int64
 	if lastActivityStr != "" { fmt.Sscanf(lastActivityStr, "%d", &lastActivity) }
 	
 	currentTime := time.Now().Unix()
-	isColdStart := (currentTime - lastActivity) > 120
+	isColdStart := (currentTime - lastActivity) > 120 
 
+	// --- B. COLD START DELAY ---
 	if isColdStart {
-		delay := 10 + rand.Intn(3) 
+		delay := 10 + rand.Intn(3)
 		fmt.Printf("💤 [COLD START] Waiting %ds...\n", delay)
 		if interrupted := waitAndCheckOwner(ctx, chatID, delay); interrupted { return }
 	} else {
@@ -252,12 +223,16 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 		time.Sleep(1 * time.Second) 
 	}
 
+	// --- C. NOW COME ONLINE & READ ---
 	go keepOnlineSmart(client, chatID)
 	rdb.Set(ctx, fmt.Sprintf(KeyLastActivity, chatID), currentTime, 0)
 
 	client.SendPresence(ctx, types.PresenceAvailable)
+	
+	// 🔥 INSTANT READ (Blue Tick)
 	client.MarkRead(ctx, []types.MessageID{v.Info.ID}, time.Now(), v.Info.Chat, v.Info.Sender, types.ReceiptTypeRead)
 
+	// --- D. PROCESSING ---
 	msgType := GetMessageType(v.Message)
 	userText := ""
 	
@@ -265,13 +240,15 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 		time.Sleep(3 * time.Second) 
 		return 
 	} else if msgType == "audio" {
-		audioSec := GetAudioDuration(v.Message)
-		fmt.Printf("🎤 [VOICE] Duration: %ds. Listening...\n", audioSec)
+		// 🎤 VOICE: NO WAIT! INSTANT PLAY!
+		fmt.Println("🎤 [VOICE] Detected. Marking Played Immediately.")
 		
-		if interrupted := waitAndCheckOwner(ctx, chatID, audioSec); interrupted { return }
-		
+		// 🔥 Mark Played (Blue Mic) INSTANTLY
 		client.MarkRead(ctx, []types.MessageID{v.Info.ID}, time.Now(), v.Info.Chat, v.Info.Sender, types.ReceiptTypePlayed)
 
+		// ⚡ NO SLEEP HERE! (Wait scene khatam)
+		
+		// Transcribe
 		audioMsg := GetAudioFromMessage(v.Message)
 		data, err := client.Download(ctx, audioMsg)
 		if err == nil {
@@ -279,6 +256,7 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 			fmt.Printf("📝 [TEXT] \"%s\"\n", userText)
 		}
 	} else {
+		// 📝 TEXT: Standard Reading Delay
 		userText = v.Message.GetConversation()
 		if userText == "" { userText = v.Message.GetExtendedTextMessage().GetText() }
 		
@@ -293,6 +271,7 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 
 	if userText == "" { return }
 
+	// --- E. GENERATE REPLY ---
 	rawBotID := client.Store.ID.User
 	botID := strings.Split(rawBotID, ":")[0]
 	botID = strings.Split(botID, "@")[0]
@@ -300,13 +279,17 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 	aiResponse := generateCloneReply(botID, chatID, userText, senderName, msgType)
 	if aiResponse == "" { return }
 
+	// --- F. TYPING (Keep it minimal for voice) ---
 	client.SendChatPresence(ctx, v.Info.Chat, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 	
 	respLen := len(aiResponse)
-	typingSec := respLen / 10
-	if !isColdStart { typingSec = respLen / 15 }
-	if typingSec < 2 { typingSec = 2 }
-	if typingSec > 12 { typingSec = 12 }
+	typingSec := respLen / 12
+	if typingSec < 2 { typingSec = 2 } // Just enough to show 'typing...'
+	
+	// If it was voice, user expects fast reply now
+	if msgType == "audio" && typingSec > 5 {
+		typingSec = 5 // Cap audio reply typing to 5s max
+	}
 
 	fmt.Printf("✍️ [TYPING] Duration: %ds\n", typingSec)
 	if interrupted := waitAndCheckOwner(ctx, chatID, typingSec); interrupted { 
@@ -314,6 +297,7 @@ func processAIResponse(client *whatsmeow.Client, v *events.Message, senderName s
 		return 
 	}
 
+	// --- G. SEND ---
 	client.SendChatPresence(ctx, v.Info.Chat, types.ChatPresencePaused, types.ChatPresenceMediaText)
 	sendCleanReply(client, v.Info.Chat, v.Info.ID, aiResponse)
 	
@@ -360,93 +344,76 @@ func waitAndCheckOwner(ctx context.Context, chatID string, seconds int) bool {
 		if lastOwnerMsgStr != "" {
 			var lastOwnerMsg int64
 			fmt.Sscanf(lastOwnerMsgStr, "%d", &lastOwnerMsg)
-			if time.Now().Unix() - lastOwnerMsg < 5 { return true }
+			if time.Now().Unix() - lastOwnerMsg < 5 {
+				fmt.Println("🛑 Owner Active! Aborting.")
+				return true 
+			}
 		}
 		time.Sleep(1 * time.Second)
 	}
 	return false
 }
 
-// 🔥 NEW: Call Custom API (Model 2)
+// 🔥 CUSTOM API CALL
 func CallCustomAPI(prompt string) string {
-	// Encode the prompt safely for URL query
 	safePrompt := url.QueryEscape(prompt)
 	fullURL := fmt.Sprintf("%s?message=%s", CustomAPIURL, safePrompt)
-
-	// Create Request
 	resp, err := http.Get(fullURL)
-	if err != nil {
-		fmt.Println("❌ [API ERROR] Request failed:", err)
-		return ""
-	}
+	if err != nil { return "" }
 	defer resp.Body.Close()
-
-	// Read Body
 	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Println("❌ [API ERROR] Read failed:", err)
-		return ""
-	}
-
-	// Parse JSON
+	if err != nil { return "" }
 	var result struct {
 		Response string `json:"response"`
-		Status   string `json:"status"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		fmt.Println("❌ [API ERROR] JSON Parse failed:", err)
-		return ""
-	}
-
+	if err := json.Unmarshal(body, &result); err != nil { return "" }
 	return result.Response
 }
 
-// 🧬 CLONE ENGINE (UPDATED WITH SWITCH)
+// 🧬 CLONE ENGINE (STRICT LANGUAGE RULES)
 func generateCloneReply(botID, chatID, currentMsg, senderName, inputType string) string {
 	ctx := context.Background()
-	
-	// 🔥 Check which model is selected (1 or 2)
-	selectedModel, err := rdb.Get(ctx, KeySelectedModel).Result()
-	if err != nil || selectedModel == "" {
-		selectedModel = "1" // Default to Gemini
-	}
+	selectedModel, _ := rdb.Get(ctx, KeySelectedModel).Result()
+	if selectedModel == "" { selectedModel = "1" }
 
 	historyList, _ := rdb.LRange(ctx, fmt.Sprintf(KeyChatHistory, botID, chatID), 0, -1).Result()
 	history := strings.Join(historyList, "\n")
 
 	voiceInstruction := ""
 	if inputType == "audio" {
-		voiceInstruction = "⚠️ NOTE: User sent a VOICE MESSAGE. Text is transcription. Reply naturally."
+		voiceInstruction = "⚠️ User sent a VOICE NOTE. Text is transcription."
 	}
 
+	// 🔥🔥🔥 UPDATED PROMPT: STRICT ROMAN URDU 🔥🔥🔥
 	fullPrompt := fmt.Sprintf(`
-You are "Me" (The Owner). You are chatting with "%s".
-Reply EXACTLY like "Me".
+You are "Me" (The Owner). Chatting with "%s".
+Your goal: Reply EXACTLY like "Me" based on the history.
 
-INSTRUCTIONS:
-1. **Mimic Tone:** Copy my style from history.
-2. **Context:** %s
-3. **Short & Real:** Behave like a human.
-4. **Closing:** End chat if natural.
+🚨 CRITICAL LANGUAGE RULES (DO NOT BREAK):
+1. **NO HINDI SCRIPT:** Never use Devanagari script (e.g., नमस्ते).
+2. **NO URDU SCRIPT:** Never use Arabic/Urdu script (e.g., السلام علیکم) unless the user EXPLICITLY asks ("Urdu script me likho").
+3. **ROMAN URDU ONLY:** If replying in Urdu/Hindi, use ENGLISH ALPHABETS (e.g., "Kese ho?", "Main theek hoon").
+4. **ENGLISH:** English is allowed if the user is speaking English.
+5. **DEFAULT:** If unsure, use Roman Urdu.
 
-HISTORY:
+BEHAVIOR:
+- Be casual, short, and natural.
+- %s
+
+CHAT HISTORY:
 %s
 ---
 USER (%s): %s
 ME:`, senderName, voiceInstruction, history, inputType, currentMsg)
 
-	// 🔥 MODE 2: CUSTOM API
+	// MODE 2: CUSTOM API
 	if selectedModel == "2" {
-		fmt.Println("🤖 [AI ENGINE] Using Custom API (Model 2)...")
-		response := CallCustomAPI(fullPrompt)
-		if response != "" {
-			return response
-		}
-		fmt.Println("⚠️ [AI ENGINE] Custom API Failed! Fallback to Gemini.")
+		fmt.Println("🤖 [AI] Using Custom API...")
+		return CallCustomAPI(fullPrompt)
 	}
 
-	// 🔥 MODE 1: GOOGLE GEMINI (Default)
-	fmt.Println("🤖 [AI ENGINE] Using Gemini (Model 1)...")
+	// MODE 1: GEMINI
+	fmt.Println("🤖 [AI] Using Gemini...")
 	var keys []string
 	if k := os.Getenv("GOOGLE_API_KEY"); k != "" { keys = append(keys, k) }
 	for i := 1; i <= 50; i++ {
