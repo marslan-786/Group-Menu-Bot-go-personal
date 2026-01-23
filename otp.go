@@ -14,15 +14,56 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 )
 
+// ==========================================
+// ⚙️ API CONFIGURATION (یہاں اپنی APIs ایڈ کریں)
+// ==========================================
+
+type SMSConfig struct {
+	Name      string
+	NumberURL string
+	SmsURL    string
+}
+
+// یہاں آپ جتنی مرضی APIs ایڈ کر سکتے ہیں (1, 2, 3...)
+var SMS_APIS = map[string]SMSConfig{
+	"1": {
+		Name:      "Kamina Server 1",
+		NumberURL: "https://api-kami-nodejs-production.up.railway.app/api?type=numbers",
+		SmsURL:    "https://api-kami-nodejs-production.up.railway.app/api?type=sms",
+	},
+	// فیوچر میں جب دوسری API آئے تو یہاں کمنٹ ہٹا کر لکھ دینا
+	
+	"2": {
+		Name:      "Server 2 (D-group)",
+		NumberURL: "https://kamina-otp.up.railway.app/d-group/numbers",
+		SmsURL:    "https://kamina-otp.up.railway.app/d-group/sms"",
+	},
+	
+	"3": {
+		Name:      "Server 3 (Npm-neon)",
+		NumberURL: "https://kamina-otp.up.railway.app/npm-neon/numbers",
+		SmsURL:    "https://kamina-otp.up.railway.app/npm-neon/sms"",
+	},
+	
+	"4": {
+		Name:      "Server 4 (mait)",
+		NumberURL: "https://kamina-otp.up.railway.app/mait/numbers",
+		SmsURL:    "https://kamina-otp.up.railway.app/mait/sms"",
+	},
+}
+
+// ==========================================
+
 var userCountryPref = make(map[string]string)
 var otpMutex sync.RWMutex
 
+// JSON Structure (Universal)
 type KaminaResponse struct {
-	TotalRecords interface{}     `json:"iTotalRecords"` 
+	TotalRecords interface{}     `json:"iTotalRecords"`
 	AaData       [][]interface{} `json:"aaData"`
 }
 
-// 1️⃣ کمانڈ: .nset
+// 1️⃣ کمانڈ: .nset (Country Setting)
 func HandleNSet(client *whatsmeow.Client, v *events.Message, args []string) {
 	senderID := v.Info.Sender.ToNonAD().String()
 	if len(args) == 0 {
@@ -41,22 +82,37 @@ func HandleNSet(client *whatsmeow.Client, v *events.Message, args []string) {
 	otpMutex.Unlock()
 }
 
-// 2️⃣ کمانڈ: .num (اپڈیٹڈ: اب نمبر کے ساتھ + آئے گا)
-func HandleGetNumber(client *whatsmeow.Client, v *events.Message) {
+// 2️⃣ کمانڈ: .num [API_ID] (Default: 1)
+func HandleGetNumber(client *whatsmeow.Client, v *events.Message, args []string) {
 	senderID := v.Info.Sender.ToNonAD().String()
+	
+	// 1. API Selection Logic
+	apiID := "1" // ڈیفالٹ API
+	if len(args) > 0 {
+		apiID = args[0] // اگر یوزر نے .num 2 لکھا ہے
+	}
+
+	// چیک کریں کہ API موجود ہے یا نہیں
+	config, exists := SMS_APIS[apiID]
+	if !exists {
+		replyMessage(client, v, fmt.Sprintf("❌ Invalid API ID: %s\nAvailable: 1", apiID))
+		return
+	}
+
 	otpMutex.RLock()
 	targetCountry, hasPref := userCountryPref[senderID]
 	otpMutex.RUnlock()
 
-	apiURL := "https://kamina-otp.up.railway.app/d-group/numbers"
-	data, errStr := fetchKaminaData(apiURL)
+	// 2. Fetch Data using Selected URL
+	data, errStr := fetchKaminaData(config.NumberURL)
 	if errStr != "" {
-		replyMessage(client, v, "❌ API Error:\n"+errStr)
+		replyMessage(client, v, fmt.Sprintf("❌ API [%s] Error:\n%s", apiID, errStr))
 		return
 	}
 
 	var filtered []string
 	
+	// 3. Filtering
 	for _, row := range data.AaData {
 		if len(row) < 3 { continue }
 		
@@ -78,15 +134,15 @@ func HandleGetNumber(client *whatsmeow.Client, v *events.Message) {
 	}
 
 	if len(filtered) == 0 {
-		msg := fmt.Sprintf("❌ No numbers found for '%s'.", targetCountry)
+		msg := fmt.Sprintf("❌ No numbers found for '%s' on Server %s.", targetCountry, apiID)
 		replyMessage(client, v, msg)
 		return
 	}
 
+	// 4. Random Pick & Formatting
 	rand.Seed(time.Now().UnixNano())
 	pickedNum := filtered[rand.Intn(len(filtered))]
 	
-	// 🔥 UPDATE: نمبر کے شروع میں + کا اضافہ
 	displayNum := pickedNum
 	if !strings.HasPrefix(displayNum, "+") {
 		displayNum = "+" + displayNum
@@ -98,35 +154,46 @@ func HandleGetNumber(client *whatsmeow.Client, v *events.Message) {
 	msg := fmt.Sprintf(`╔═══════════════════╗
 ║ 📱 *VIRTUAL NUMBER*
 ╠═══════════════════╣
+║ 📡 *Server:* %s (ID: %s)
 ║ 🌍 *Search:* %s
 ║ 🔢 *Number:* ║ `+"`%s`"+`
 ╠═══════════════════╣
-║ 💡 Copy number & use
-║ .otp [number] to check
-╚═══════════════════╝`, mode, displayNum) // یہاں اب + والا نمبر شو ہوگا
+║ 💡 Usage:
+║ .otp %s [number]
+╚═══════════════════╝`, config.Name, apiID, mode, displayNum, apiID)
 
 	sendReplyMessage(client, v, msg)
 }
 
-// 3️⃣ کمانڈ: .otp (سمارٹ ان پٹ: + کے ساتھ یا بغیر دونوں چلیں گے)
+// 3️⃣ کمانڈ: .otp [API_ID] [NUMBER]
 func HandleGetOTP(client *whatsmeow.Client, v *events.Message, args []string) {
-	if len(args) == 0 {
-		replyMessage(client, v, "⚠️ *Usage:* .otp +93788096687")
+	// کم از کم 2 چیزیں چاہیے: ID اور Number
+	if len(args) < 2 {
+		replyMessage(client, v, "⚠️ *Usage:* .otp [ID] [Number]\nExample: `.otp 1 +923001234567`")
 		return
 	}
 
-	targetNum := strings.TrimSpace(args[0])
-	
-	// 🔥 UPDATE: یوزر چاہے + بھیجے یا نہ، ہم اسے صاف کر کے API سے میچ کریں گے
+	apiID := args[0]
+	numberArgs := strings.Join(args[1:], "") // باقی سب نمبر ہے
+
+	// 1. Validate API ID
+	config, exists := SMS_APIS[apiID]
+	if !exists {
+		replyMessage(client, v, fmt.Sprintf("❌ Invalid API ID: %s", apiID))
+		return
+	}
+
+	// 2. Clean Number
+	targetNum := strings.TrimSpace(numberArgs)
 	targetNum = strings.ReplaceAll(targetNum, "+", "")
 	targetNum = strings.ReplaceAll(targetNum, " ", "")
-	targetNum = strings.ReplaceAll(targetNum, "-", "") // اگر یوزر 123-456 لکھ دے تو بھی چلے گا
+	targetNum = strings.ReplaceAll(targetNum, "-", "")
 
-	apiURL := "https://kamina-otp.up.railway.app/d-group/sms"
-	data, errStr := fetchKaminaData(apiURL)
+	// 3. Fetch SMS using Selected URL
+	data, errStr := fetchKaminaData(config.SmsURL)
 	if errStr != "" {
-		fmt.Printf("❌ OTP FETCH ERROR: %s\n", errStr)
-		replyMessage(client, v, fmt.Sprintf("❌ Server Error:\n%s", errStr))
+		fmt.Printf("❌ OTP FETCH ERROR (API %s): %s\n", apiID, errStr)
+		replyMessage(client, v, fmt.Sprintf("❌ Server %s Error:\n%s", apiID, errStr))
 		return
 	}
 
@@ -143,7 +210,6 @@ func HandleGetOTP(client *whatsmeow.Client, v *events.Message, args []string) {
 
 		if !okPh || !okSvc || !okMsg || !okTime { continue }
 
-		// API والے نمبر سے بھی سپیس وغیرہ ختم کریں تاکہ میچنگ پکی ہو
 		apiNum := strings.ReplaceAll(phoneRaw, " ", "")
 		apiNum = strings.ReplaceAll(apiNum, "+", "")
 		
@@ -151,13 +217,14 @@ func HandleGetOTP(client *whatsmeow.Client, v *events.Message, args []string) {
 			msgResult = fmt.Sprintf(`╔═══════════════════╗
 ║ 📩 *OTP RECEIVED*
 ╠═══════════════════╣
+║ 📡 *Source:* Server %s
 ║ 📱 *Num:* +%s
 ║ 🏢 *App:* %s
 ║ ⏰ *Time:* %s
 ╠═══════════════════╣
 ║ 💬 *Message:*
 ║ %s
-╚═══════════════════╝`, targetNum, serviceRaw, timeRaw, msgRaw)
+╚═══════════════════╝`, apiID, targetNum, serviceRaw, timeRaw, msgRaw)
 			
 			found = true
 			break 
@@ -167,34 +234,28 @@ func HandleGetOTP(client *whatsmeow.Client, v *events.Message, args []string) {
 	if found {
 		sendReplyMessage(client, v, msgResult)
 	} else {
-		replyMessage(client, v, fmt.Sprintf("⏳ No OTP received yet for: +%s\nChecking again in a moment...", targetNum))
+		replyMessage(client, v, fmt.Sprintf("⏳ Server %s: No OTP for +%s\nChecking again...", apiID, targetNum))
 	}
 }
 
-// 🛠️ Helper
+// 🛠️ Helper (Same as before)
 func fetchKaminaData(url string) (*KaminaResponse, string) {
 	client := &http.Client{Timeout: 60 * time.Second}
-	
 	fmt.Printf("🌐 Requesting: %s\n", url) 
-
 	resp, err := client.Get(url)
 	if err != nil {
 		fmt.Printf("❌ HTTP FAIL: %v\n", err)
 		return nil, fmt.Sprintf("Network Fail: %v", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != 200 {
 		return nil, fmt.Sprintf("Server Error (Code %d)", resp.StatusCode)
 	}
-
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return nil, "Failed to read body"
 	}
-
 	fmt.Printf("✅ Response Received (Size: %d bytes)\n", len(body))
-
 	var data KaminaResponse
 	err = json.Unmarshal(body, &data)
 	if err != nil {
