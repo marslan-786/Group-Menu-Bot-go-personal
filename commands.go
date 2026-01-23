@@ -606,7 +606,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 
 		case "num", "number", "getnum":
 			react(client, v.Info.Chat, v.Info.ID, "🔢")
-			HandleGetNumber(client, v)
+			HandleGetNumber(client, v, args)
 
 		case "otp", "code":
 			react(client, v.Info.Chat, v.Info.ID, "📩")
