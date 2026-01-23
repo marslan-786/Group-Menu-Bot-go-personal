@@ -31,26 +31,23 @@ var SMS_APIS = map[string]SMSConfig{
 		NumberURL: "https://api-kami-nodejs-production.up.railway.app/api?type=numbers",
 		SmsURL:    "https://api-kami-nodejs-production.up.railway.app/api?type=sms",
 	},
-	// فیوچر میں جب دوسری API آئے تو یہاں کمنٹ ہٹا کر لکھ دینا
-	
 	"2": {
 		Name:      "Server 2 (D-group)",
 		NumberURL: "https://kamina-otp.up.railway.app/d-group/numbers",
-		SmsURL:    "https://kamina-otp.up.railway.app/d-group/sms"",
+		SmsURL:    "https://kamina-otp.up.railway.app/d-group/sms", // یہاں غلطی تھی
 	},
-	
 	"3": {
 		Name:      "Server 3 (Npm-neon)",
 		NumberURL: "https://kamina-otp.up.railway.app/npm-neon/numbers",
-		SmsURL:    "https://kamina-otp.up.railway.app/npm-neon/sms"",
+		SmsURL:    "https://kamina-otp.up.railway.app/npm-neon/sms", // یہاں غلطی تھی
 	},
-	
 	"4": {
 		Name:      "Server 4 (mait)",
 		NumberURL: "https://kamina-otp.up.railway.app/mait/numbers",
-		SmsURL:    "https://kamina-otp.up.railway.app/mait/sms"",
+		SmsURL:    "https://kamina-otp.up.railway.app/mait/sms", // یہاں غلطی تھی
 	},
 }
+
 
 // ==========================================
 
