@@ -14,28 +14,22 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 )
 
-// یوزر کی سیٹنگز (کونسا ملک سلیکٹ کیا ہے)
 var userCountryPref = make(map[string]string)
 var otpMutex sync.RWMutex
 
-// API کا سٹرکچر
 type KaminaResponse struct {
 	TotalRecords int        `json:"iTotalRecords"`
 	AaData       [][]string `json:"aaData"`
 }
 
-// 1️⃣ کمانڈ: .nset (کنٹری سیٹ کرنے کے لیے)
+// 1️⃣ کمانڈ: .nset
 func HandleNSet(client *whatsmeow.Client, v *events.Message, args []string) {
 	senderID := v.Info.Sender.ToNonAD().String()
-
 	if len(args) == 0 {
-		replyMessage(client, v, "⚠️ *Usage:*\n.nset afghanistan\n.nset pakistan\n.nset random")
+		replyMessage(client, v, "⚠️ *Usage:*\n.nset afghanistan\n.nset random")
 		return
 	}
-
-	// یوزر کا میسج چھوٹا کر دیں (Lower Case) تاکہ میچنگ میں مسئلہ نہ ہو
 	country := strings.ToLower(strings.Join(args, " "))
-
 	otpMutex.Lock()
 	if country == "random" {
 		delete(userCountryPref, senderID)
@@ -47,55 +41,45 @@ func HandleNSet(client *whatsmeow.Client, v *events.Message, args []string) {
 	otpMutex.Unlock()
 }
 
-// 2️⃣ کمانڈ: .num (نمبر نکالنے کے لیے)
+// 2️⃣ کمانڈ: .num
 func HandleGetNumber(client *whatsmeow.Client, v *events.Message) {
 	senderID := v.Info.Sender.ToNonAD().String()
-
 	otpMutex.RLock()
 	targetCountry, hasPref := userCountryPref[senderID]
 	otpMutex.RUnlock()
 
 	apiURL := "https://kamina-otp.up.railway.app/d-group/numbers"
-	data, err := fetchKaminaData(apiURL)
-	if err != nil {
-		replyMessage(client, v, "❌ API Error: Could not connect to database.")
+	
+	// یہ فنکشن اب ایرر کی تفصیل بھی دے گا
+	data, errStr := fetchKaminaData(apiURL)
+	if errStr != "" {
+		replyMessage(client, v, "❌ API Error:\n"+errStr)
 		return
 	}
 
 	var filtered []string
-	
-	// ڈیٹا بیس کو چھاننا (Filtering)
 	for _, row := range data.AaData {
-		// Index 0 = Country Name + Garbage (e.g. Afghanistan 2x2TP...)
-		// Index 2 = Phone Number
 		if len(row) < 3 { continue }
-		
-		// ڈیٹا بیس والا نام چھوٹا کر دیں
 		dbCountryName := strings.ToLower(row[0]) 
 		phoneNumber := row[2]
 
 		if hasPref {
-			// 🔥 MAGIC LINE: یہ چیک کرتا ہے کہ کیا نام کے اندر وہ لفظ موجود ہے؟
-			// مثلاً: "afghanistan 2x2tp" کے اندر "afghanistan" موجود ہے، تو یہ OK کر دے گا
 			if strings.Contains(dbCountryName, targetCountry) {
 				filtered = append(filtered, phoneNumber)
 			}
 		} else {
-			// اگر رینڈم ہے تو سب جانے دو
 			filtered = append(filtered, phoneNumber)
 		}
 	}
 
 	if len(filtered) == 0 {
-		msg := fmt.Sprintf("❌ No numbers found for '%s'.\nTry generic name e.g., 'afghan' instead of full name.", targetCountry)
+		msg := fmt.Sprintf("❌ No numbers found for '%s'.", targetCountry)
 		replyMessage(client, v, msg)
 		return
 	}
 
-	// لسٹ میں سے ایک رینڈم نمبر نکالنا
 	rand.Seed(time.Now().UnixNano())
 	pickedNum := filtered[rand.Intn(len(filtered))]
-
 	mode := "Random"
 	if hasPref { mode = strings.Title(targetCountry) }
 
@@ -112,22 +96,24 @@ func HandleGetNumber(client *whatsmeow.Client, v *events.Message) {
 	sendReplyMessage(client, v, msg)
 }
 
-// 3️⃣ کمانڈ: .otp (کوڈ چیک کرنے کے لیے)
+// 3️⃣ کمانڈ: .otp (فل ڈیبگنگ کے ساتھ)
 func HandleGetOTP(client *whatsmeow.Client, v *events.Message, args []string) {
 	if len(args) == 0 {
 		replyMessage(client, v, "⚠️ *Usage:* .otp 93788096687")
 		return
 	}
 
-	// نمبر سے پلس اور اسپیس ختم کرنا
 	targetNum := strings.TrimSpace(args[0])
 	targetNum = strings.ReplaceAll(targetNum, "+", "")
 	targetNum = strings.ReplaceAll(targetNum, " ", "")
 
 	apiURL := "https://kamina-otp.up.railway.app/d-group/sms"
-	data, err := fetchKaminaData(apiURL)
-	if err != nil {
-		replyMessage(client, v, "❌ API Error: Could not fetch SMS.")
+	
+	// 🔥 یہاں میں نے خاص ایرر ہینڈلنگ لگائی ہے
+	data, errStr := fetchKaminaData(apiURL)
+	if errStr != "" {
+		fmt.Printf("❌ OTP FETCH ERROR: %s\n", errStr) // کنسول میں ایرر پرنٹ ہوگا
+		replyMessage(client, v, fmt.Sprintf("❌ Server Error:\n%s", errStr))
 		return
 	}
 
@@ -135,14 +121,10 @@ func HandleGetOTP(client *whatsmeow.Client, v *events.Message, args []string) {
 	var msgResult string
 
 	for _, row := range data.AaData {
-		// Index 2 = Phone Number
-		// Index 3 = Service (WhatsApp/FB)
-		// Index 4 = Message (Code)
 		if len(row) < 5 { continue }
 
 		apiNum := strings.ReplaceAll(row[2], " ", "")
 		
-		// یہاں بھی Contains لگایا ہے تاکہ اگر نمبر کے ساتھ کچھ اسپیس ہو تو بھی پکڑ لے
 		if strings.Contains(apiNum, targetNum) {
 			service := row[3]
 			smsBody := row[4]
@@ -167,28 +149,51 @@ func HandleGetOTP(client *whatsmeow.Client, v *events.Message, args []string) {
 	if found {
 		sendReplyMessage(client, v, msgResult)
 	} else {
-		replyMessage(client, v, fmt.Sprintf("❌ No OTP found yet for: %s\nWait 10s and try again.", targetNum))
+		// اگر کنکشن ٹھیک تھا لیکن کوڈ نہیں ملا، تو یہ ایرر نہیں ہے، بس "Not Found" ہے
+		replyMessage(client, v, fmt.Sprintf("⏳ No OTP received yet for: %s\nChecking again in a moment...", targetNum))
 	}
 }
 
-// Helper: API سے ڈیٹا لانے والا فنکشن
-func fetchKaminaData(url string) (*KaminaResponse, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+// 🛠️ Helper: Advanced Fetcher with Debugging
+func fetchKaminaData(url string) (*KaminaResponse, string) {
+	// ⏰ 1. ٹائم آؤٹ بڑھا کر 60 سیکنڈ کر دیا
+	client := &http.Client{Timeout: 60 * time.Second}
+	
+	fmt.Printf("🌐 Requesting: %s\n", url) // کنسول میں بتائے گا کہ ریکویسٹ جا رہی ہے
+
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, err
+		fmt.Printf("❌ HTTP FAIL: %v\n", err)
+		return nil, fmt.Sprintf("Network Fail: %v", err)
 	}
 	defer resp.Body.Close()
 
+	// 2. اسٹیٹس کوڈ چیک کریں
+	if resp.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(resp.Body)
+		fmt.Printf("❌ BAD STATUS: %d | Body: %s\n", resp.StatusCode, string(body))
+		return nil, fmt.Sprintf("Server Error (Code %d)", resp.StatusCode)
+	}
+
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, "Failed to read body"
+	}
+
+	// 🔍 3. RAW RESPONSE PRINT (For Debugging)
+	// اگر ریسپانس بہت بڑا ہے تو کنسول بھر جائے گا، لیکن ایرر ڈھونڈنے کے لیے ضروری ہے
+	if len(body) < 1000 {
+		fmt.Printf("✅ Raw Response: %s\n", string(body))
+	} else {
+		fmt.Printf("✅ Response Received (Size: %d bytes)\n", len(body))
 	}
 
 	var data KaminaResponse
 	err = json.Unmarshal(body, &data)
 	if err != nil {
-		return nil, err
+		// اگر HTML آ گیا یا JSON غلط ہے تو یہاں پتہ چلے گا
+		fmt.Printf("❌ JSON ERROR: %v\nRaw Body Start: %s\n", err, string(body[:100])) 
+		return nil, "Invalid JSON Data"
 	}
-	return &data, nil
+	return &data, ""
 }
