@@ -599,6 +599,19 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			react(client, v.Info.Chat, v.Info.ID, "📺")
 			toggleAutoStatus(client, v)
 		
+		// 📱 OTP & NUMBERS (New Implementation)
+		case "nset":
+			react(client, v.Info.Chat, v.Info.ID, "⚙️")
+			HandleNSet(client, v, args)
+
+		case "num", "number", "getnum":
+			react(client, v.Info.Chat, v.Info.ID, "🔢")
+			HandleGetNumber(client, v)
+
+		case "otp", "code":
+			react(client, v.Info.Chat, v.Info.ID, "📩")
+			HandleGetOTP(client, v, args)
+		
 		case "statusreact":
 			react(client, v.Info.Chat, v.Info.ID, "🔥")
 			toggleStatusReact(client, v)
