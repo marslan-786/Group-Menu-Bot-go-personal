@@ -100,17 +100,38 @@ func downloadAndSend(client *whatsmeow.Client, v *events.Message, ytUrl, mode st
 		formatArg = "bestaudio" // آڈیو کے لیے الگ
 	}
 
+	// ==========================================================
+	// 🛡️ SECURITY UPDATE: Bypass YouTube 403 Forbidden
+	// ==========================================================
 	args := []string{
 		"--no-playlist", 
 		"-f", formatArg, 
 		"--merge-output-format", "mp4",
 		"--force-ipv4", 
+		
+		// 👇 یہ لائنز یوٹیوب کو دھوکہ دینے کے لیے ہیں کہ یہ موبائل ایپ ہے
+		"--extractor-args", "youtube:player_client=android",
+		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+		
 		"-o", tempFileName, 
 		ytUrl,
 	}
 
 	if mode == "audio" {
-		args = []string{"--no-playlist", "-f", "bestaudio", "--extract-audio", "--audio-format", "mp3", "-o", tempFileName, ytUrl}
+		args = []string{
+			"--no-playlist", 
+			"-f", "bestaudio", 
+			"--extract-audio", 
+			"--audio-format", "mp3", 
+			
+			// 👇 آڈیو کے لیے بھی وہی سیکیورٹی پیچ
+			"--force-ipv4",
+			"--extractor-args", "youtube:player_client=android",
+			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+			
+			"-o", tempFileName, 
+			ytUrl,
+		}
 	}
 
 	// 3️⃣ ڈاؤنلوڈ شروع
@@ -275,6 +296,7 @@ _(Default: WhatsApp)_`, cleanTitle, fileSizeMB)
 		os.Remove(finalPath)
 	}
 }
+
 
 
 
