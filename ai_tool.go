@@ -208,7 +208,7 @@ func handleRemini(client *whatsmeow.Client, v *events.Message) {
 	}
 
 	// 4️⃣ Remini API کو کال کریں
-	apiURL := fmt.Sprintf("https://final-enhanced-production.up.railway.app/enhance?url=%s", url.QueryEscape(publicURL))
+	apiURL := fmt.Sprintf("https://pic-enhanced-production.up.railway.app/enhance?url=%s", url.QueryEscape(publicURL))
 	resp, err := http.Get(apiURL)
 	if err != nil {
 		replyMessage(client, v, "❌ AI Enhancement Engine is offline.")
