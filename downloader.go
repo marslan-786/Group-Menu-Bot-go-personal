@@ -416,6 +416,11 @@ func handleInstagram(client *whatsmeow.Client, v *events.Message, url string) {
 	go downloadAndSend(client, v, url, "video")
 }
 
+func handleRemini(client *whatsmeow.Client, v *events.Message, url string) {
+	sendPremiumCard(client, v, "Instagram Reel", "Instagram", "📸 Capturing Media...")
+	go downloadAndSend(client, v, url, "video")
+}
+
 func handleTikTok(client *whatsmeow.Client, v *events.Message, urlStr string) {
 	if urlStr == "" { return }
 	react(client, v.Info.Chat, v.Info.ID, "🎵")
