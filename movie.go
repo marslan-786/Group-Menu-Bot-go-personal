@@ -18,29 +18,31 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types/events"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
-	"google.golang.org/protobuf/proto" // ✅ یہ امپورٹ ضروری ہے proto.String کے لیے
+	"google.golang.org/protobuf/proto"
 )
 
 // --- ⚙️ CONFIGURATION ---
 const ChunkSize int64 = 1024 * 1024 * 1024 // 1GB Limit
 
 // --- 🧠 MEMORY SYSTEM ---
-type MovieResult struct {
+type ArchiveResult struct {
 	Identifier string
 	Title      string
 	Year       string
 	Downloads  int
+	Type       string // New: To verify file type
 }
 
-var searchCache = make(map[string][]MovieResult)
-var movieMutex sync.Mutex 
+var archiveCache = make(map[string][]ArchiveResult)
+var archiveMutex sync.Mutex
 
-// Archive API Response Structures
+// API Response Structures
 type IAHeader struct {
 	Identifier string      `json:"identifier"`
 	Title      string      `json:"title"`
 	Year       interface{} `json:"year"`
 	Downloads  interface{} `json:"downloads"`
+	Mediatype  string      `json:"mediatype"`
 }
 
 type IAResponse struct {
@@ -53,174 +55,189 @@ type IAMetadata struct {
 	Files []struct {
 		Name   string `json:"name"`
 		Format string `json:"format"`
-		Size   string `json:"size"` 
+		Size   string `json:"size"`
 	} `json:"files"`
 }
 
-func handleArchive(client *whatsmeow.Client, v *events.Message, input string) {
+// --- 🎮 MAIN HANDLER (Updated) ---
+// mode can be "movie" or "universal"
+func handleArchive(client *whatsmeow.Client, v *events.Message, input string, mode string) {
 	if input == "" { return }
 	input = strings.TrimSpace(input)
 	senderJID := v.Info.Sender.String()
 
-	// --- 1️⃣ Number Selection ---
+	// 1️⃣ Number Selection (Download Logic)
 	if isNumber(input) {
 		index, _ := strconv.Atoi(input)
 		
-		movieMutex.Lock()
-		movies, exists := searchCache[senderJID]
-		movieMutex.Unlock()
+		archiveMutex.Lock()
+		results, exists := archiveCache[senderJID]
+		archiveMutex.Unlock()
 
-		if exists && index > 0 && index <= len(movies) {
-			selectedMovie := movies[index-1]
+		if exists && index > 0 && index <= len(results) {
+			selected := results[index-1]
 			
 			react(client, v.Info.Chat, v.Info.ID, "🔄")
-			replyMessage(client, v, fmt.Sprintf("🔎 *Checking files for:* %s\nPlease wait...", selectedMovie.Title))
+			replyMessage(client, v, fmt.Sprintf("🔎 *Checking files for:* %s\nType: %s", selected.Title, selected.Type))
 			
-			go downloadFromIdentifier(client, v, selectedMovie)
+			// اگر کتاب ہے تو PDF ڈھونڈے گا، مووی ہے تو Video
+			go downloadFromArchive(client, v, selected)
 			return
 		}
 	}
 
-	// --- 2️⃣ Direct Link ---
+	// 2️⃣ Direct Link
 	if strings.HasPrefix(input, "http") {
 		react(client, v.Info.Chat, v.Info.ID, "🔗")
-		replyMessage(client, v, "⏳ *Processing Direct Link...*")
 		go downloadFileDirectly(client, v, input, "Unknown_File")
 		return
 	}
 
-	// --- 3️⃣ Search Query ---
+	// 3️⃣ Search Query
 	react(client, v.Info.Chat, v.Info.ID, "🔎")
-	go performSearch(client, v, input, senderJID)
+	go performArchiveSearch(client, v, input, senderJID, mode)
 }
 
-// --- 🔍 Helper: Search Engine ---
-func performSearch(client *whatsmeow.Client, v *events.Message, query string, senderJID string) {
-	encodedQuery := url.QueryEscape(fmt.Sprintf("title:(%s) AND mediatype:(movies)", query))
-	apiURL := fmt.Sprintf("https://archive.org/advancedsearch.php?q=%s&fl[]=identifier&fl[]=title&fl[]=year&fl[]=downloads&sort[]=downloads+desc&output=json&rows=10", encodedQuery)
+// --- 🔍 Helper: Search Engine (Updated for Modes) ---
+func performArchiveSearch(client *whatsmeow.Client, v *events.Message, query string, senderJID string, mode string) {
+	// 🔥 Dynamic Query Builder
+	searchQ := fmt.Sprintf("title:(%s)", query)
+	
+	// اگر مووی موڈ ہے تو صرف موویز، ورنہ سب کچھ
+	if mode == "movie" {
+		searchQ += " AND mediatype:(movies)"
+	}
+	
+	encodedQuery := url.QueryEscape(searchQ)
+	// fields میں mediatype بھی منگوا لیا
+	apiURL := fmt.Sprintf("https://archive.org/advancedsearch.php?q=%s&fl[]=identifier&fl[]=title&fl[]=year&fl[]=downloads&fl[]=mediatype&sort[]=downloads+desc&output=json&rows=10", encodedQuery)
 
 	req, _ := http.NewRequest("GET", apiURL, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-
 	clientHttp := &http.Client{Timeout: 30 * time.Second}
 	resp, err := clientHttp.Do(req)
 	
-	if err != nil {
-		replyMessage(client, v, "❌ Network Error: Could not reach Archive API.")
+	if err != nil || resp.StatusCode != 200 {
+		replyMessage(client, v, "❌ Archive API Error.")
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		replyMessage(client, v, fmt.Sprintf("❌ API Error: %d", resp.StatusCode))
-		return
-	}
-
 	var result IAResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		replyMessage(client, v, "❌ Data Parse Error (Invalid JSON).")
-		return
-	}
+	json.NewDecoder(resp.Body).Decode(&result)
 
 	docs := result.Response.Docs
 	if len(docs) == 0 {
-		replyMessage(client, v, "🚫 No movies found. Please Check Your Spelling or Try a different name.")
+		replyMessage(client, v, "🚫 No results found on Archive.org")
 		return
 	}
 
-	var movieList []MovieResult
-	msgText := fmt.Sprintf("🎬 *Archive Results for:* '%s'\n\n", query)
+	var list []ArchiveResult
+	// 🏷️ Header based on Mode
+	titlePrefix := "🏛️ *Archive Universal Results*"
+	if mode == "movie" { titlePrefix = "🎬 *Movie Search Results*" }
+	
+	msgText := fmt.Sprintf("%s for: '%s'\n\n", titlePrefix, query)
 
 	for i, doc := range docs {
 		yearStr := fmt.Sprintf("%v", doc.Year)
-		
 		dlCount := 0
 		switch val := doc.Downloads.(type) {
-		case float64:
-			dlCount = int(val)
-		case string:
-			dlCount, _ = strconv.Atoi(val)
+		case float64: dlCount = int(val)
+		case string: dlCount, _ = strconv.Atoi(val)
 		}
 
-		movieList = append(movieList, MovieResult{
+		// List میں شامل کریں
+		list = append(list, ArchiveResult{
 			Identifier: doc.Identifier,
 			Title:      doc.Title,
 			Year:       yearStr,
 			Downloads:  dlCount,
+			Type:       doc.Mediatype, // e.g., texts, movies, audio
 		})
-		msgText += fmt.Sprintf("*%d.* %s (%s)\n", i+1, doc.Title, yearStr)
+		
+		// Icon based on type
+		icon := "📁"
+		if doc.Mediatype == "movies" { icon = "🎬" }
+		if doc.Mediatype == "texts" { icon = "📚" }
+		if doc.Mediatype == "audio" { icon = "🎵" }
+
+		msgText += fmt.Sprintf("*%d.* %s %s (%s)\n", i+1, icon, doc.Title, yearStr)
 	}
 	
 	msgText += "\n👇 *Reply with a number to download.*"
 
-	movieMutex.Lock()
-	searchCache[senderJID] = movieList
-	movieMutex.Unlock()
+	archiveMutex.Lock()
+	archiveCache[senderJID] = list
+	archiveMutex.Unlock()
 
+	// Send Menu
 	client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		ExtendedTextMessage: &waProto.ExtendedTextMessage{
 			Text: proto.String(msgText),
-			ContextInfo: &waProto.ContextInfo{
-				StanzaID:      proto.String(v.Info.ID),
-				Participant:   proto.String(v.Info.Sender.String()),
-				QuotedMessage: v.Message,
-			},
+			ContextInfo: &waProto.ContextInfo{StanzaID: proto.String(v.Info.ID), Participant: proto.String(senderJID), QuotedMessage: v.Message},
 		},
 	})
 }
 
-// --- 📥 Helper: Metadata Logic ---
-func downloadFromIdentifier(client *whatsmeow.Client, v *events.Message, movie MovieResult) {
-	fmt.Println("🔍 [ARCHIVE] Fetching metadata for:", movie.Identifier)
-	
-	metaURL := fmt.Sprintf("https://archive.org/metadata/%s", movie.Identifier)
-	req, _ := http.NewRequest("GET", metaURL, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	
-	clientHttp := &http.Client{Timeout: 30 * time.Second}
-	resp, err := clientHttp.Do(req)
-	
+// --- 📥 Helper: Smart File Picker (PDF vs Video) ---
+func downloadFromArchive(client *whatsmeow.Client, v *events.Message, item ArchiveResult) {
+	metaURL := fmt.Sprintf("https://archive.org/metadata/%s", item.Identifier)
+	resp, err := http.Get(metaURL)
 	if err != nil { return }
 	defer resp.Body.Close()
 
 	var meta IAMetadata
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
-		replyMessage(client, v, "❌ Metadata Error: JSON parse failed.")
-		return
-	}
+	json.NewDecoder(resp.Body).Decode(&meta)
 
 	bestFile := ""
 	maxSize := int64(0)
+	
+	// 🔥 Intelligent Filter
+	targetExts := []string{}
+	
+	if item.Type == "texts" {
+		// اگر کتاب ہے تو PDF یا EPUB ڈھونڈو
+		targetExts = []string{".pdf", ".epub"}
+	} else if item.Type == "movies" {
+		// اگر مووی ہے تو Video
+		targetExts = []string{".mp4", ".mkv", ".avi"}
+	} else if item.Type == "audio" {
+		targetExts = []string{".mp3", ".flac"}
+	} else {
+		// اگر کچھ اور ہے (جیسے سافٹ ویئر) تو ZIP/ISO/EXE
+		targetExts = []string{".zip", ".iso", ".rar", ".pdf", ".mp4"}
+	}
 
 	for _, f := range meta.Files {
 		fName := strings.ToLower(f.Name)
-		if strings.HasSuffix(fName, ".mp4") || strings.HasSuffix(fName, ".mkv") {
-			s, _ := strconv.ParseInt(f.Size, 10, 64)
-			if s > maxSize {
-				maxSize = s
-				bestFile = f.Name
+		s, _ := strconv.ParseInt(f.Size, 10, 64)
+
+		// Check extensions
+		for _, ext := range targetExts {
+			if strings.HasSuffix(fName, ext) {
+				// سب سے بڑی فائل اٹھائے (High Quality)
+				if s > maxSize {
+					maxSize = s
+					bestFile = f.Name
+				}
 			}
 		}
 	}
 
 	if bestFile == "" {
-		replyMessage(client, v, "❌ No suitable video file found.")
+		replyMessage(client, v, "❌ No suitable file found in this archive item.")
 		return
 	}
 
-	finalURL := fmt.Sprintf("https://archive.org/download/%s/%s", movie.Identifier, url.PathEscape(bestFile))
+	finalURL := fmt.Sprintf("https://archive.org/download/%s/%s", item.Identifier, url.PathEscape(bestFile))
 	sizeMB := float64(maxSize) / (1024 * 1024)
-	
-	extraWarning := ""
-	if sizeMB > 1000 {
-		extraWarning = "\n⚠️ *Large File:* Sending in 1GB parts using Disk Buffer."
-	}
 
-	infoMsg := fmt.Sprintf("🚀 *Starting Download!*\n\n🎬 *Title:* %s\n📊 *Size:* %.2f MB%s", movie.Title, sizeMB, extraWarning)
-	replyMessage(client, v, infoMsg)
+	replyMessage(client, v, fmt.Sprintf("🚀 *Downloading:* %s\n📂 *Type:* %s\n📦 *Size:* %.2f MB", item.Title, item.Type, sizeMB))
 	
-	downloadFileDirectly(client, v, finalURL, movie.Title)
+	downloadFileDirectly(client, v, finalURL, item.Title)
 }
+
+// --- 🚀 Core Downloader (Same as before) ---
 
 // --- 🚀 Core Downloader (Optimized Disk Stream) ---
 func downloadFileDirectly(client *whatsmeow.Client, v *events.Message, urlStr string, customTitle string) {

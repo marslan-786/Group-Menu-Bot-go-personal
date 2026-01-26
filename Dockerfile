@@ -68,9 +68,7 @@ RUN pip3 install --no-cache-dir \
     torch torchaudio --index-url https://download.pytorch.org/whl/cpu \
     && pip3 install --no-cache-dir \
     fastapi uvicorn python-multipart requests \
-    faster-whisper scipy gTTS \
-    scribd-downloader
-
+    faster-whisper scipy gTTS 
 
 
 WORKDIR /app

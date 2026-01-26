@@ -946,10 +946,21 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			react(client, v.Info.Chat, v.Info.ID, "🎮")
 			handleSteam(client, v, fullArgs)
 		
-		case "archive", "movie":
-			react(client, v.Info.Chat, v.Info.ID, "🏛️")
-			handleArchive(client, v, fullArgs)
-		
+		// 1. Movie Search (Old behavior)
+		case "movie", "film":
+		    react(client, v.Info.Chat, v.Info.ID, "📸")
+			handleArchive(client, v, fullArgs, "movie")
+
+		// 2. Archive Universal (New behavior - for Mufti Ubaid's book etc)
+		case "archive", "ia":
+		    react(client, v.Info.Chat, v.Info.ID, "🏛️")
+			handleArchive(client, v, fullArgs, "universal")
+
+		// 3. Libgen Books (New Feature)
+		case "book", "libgen", "pdf":
+		    react(client, v.Info.Chat, v.Info.ID, "📒")
+			handleLibgen(client, v, fullArgs)
+
 		case "git", "github":
 			react(client, v.Info.Chat, v.Info.ID, "🐱")
 			handleGithub(client, v, fullArgs)
@@ -957,10 +968,6 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		case "dl", "direct":
 			react(client, v.Info.Chat, v.Info.ID, "🔗")
 			handleDirect(client, v, fullArgs)
-		
-        case "scribd":
-            react(client, v.Info.Chat, v.Info.ID, "📑")
-            handleScribd(client, v, fullArgs)
 		
 		case "mega":
 			react(client, v.Info.Chat, v.Info.ID, "📥")
