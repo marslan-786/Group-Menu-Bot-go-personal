@@ -986,3 +986,56 @@ func handleDirect(client *whatsmeow.Client, v *events.Message, link string) {
 	// 6️⃣ صفائی
 	os.Remove(tempPath)
 }
+
+// 📚 SCRIBD HANDLER (Using scribd-dl Python Tool)
+func handleScribd(client *whatsmeow.Client, v *events.Message, link string) {
+	if link == "" {
+		replyMessage(client, v, "❌ Link Missing!")
+		return
+	}
+
+	// 1️⃣ کارڈ بھیجیں
+	sendPremiumCard(client, v, "Scribd Doc", "Scribd", "📑 Extracting Pages & Converting to PDF...")
+
+	// 2️⃣ فائل کا نام سیٹ کریں
+	// ٹائم سٹیمپ کے ساتھ فولڈر بنائیں تاکہ مکس نہ ہو
+	outputDir := fmt.Sprintf("temp_scribd_%d", time.Now().Unix())
+	
+	// کمانڈ چلائیں: scribd-dl URL
+	// --pages 1-100 (آپ لمٹ لگا سکتے ہیں ورنہ بہت ٹائم لگے گا)
+	cmd := exec.Command("scribd-dl", link, "--output", outputDir)
+	
+	// لوگو چیک کرنے کے لیے
+	fmt.Println("📚 [SCRIBD] Starting download for:", link)
+	
+	err := cmd.Run()
+	if err != nil {
+		fmt.Println("❌ Scribd Error:", err)
+		replyMessage(client, v, "❌ Failed to download from Scribd. (Content might be Premium-only)")
+		return
+	}
+
+	// 3️⃣ ڈاؤن لوڈ شدہ فائل ڈھونڈیں
+	// scribd-dl فولڈر کے اندر .pdf فائل بناتا ہے
+	files, _ := filepath.Glob(filepath.Join(outputDir, "*.pdf"))
+	if len(files) == 0 {
+		replyMessage(client, v, "❌ Error: PDF conversion failed.")
+		os.RemoveAll(outputDir)
+		return
+	}
+	
+	finalPath := files[0]
+	info, _ := os.Stat(finalPath)
+	filename := filepath.Base(finalPath)
+
+	// 4️⃣ واٹس ایپ پر بھیجیں
+	uploadToWhatsApp(client, v, DLResult{
+		Path:  finalPath,
+		Title: filename,
+		Size:  info.Size(),
+		Mime:  "application/pdf",
+	}, "document")
+
+	// 5️⃣ صفائی (پورا فولڈر اڑا دیں)
+	os.RemoveAll(outputDir)
+}

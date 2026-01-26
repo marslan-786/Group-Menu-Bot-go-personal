@@ -958,6 +958,10 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			react(client, v.Info.Chat, v.Info.ID, "🔗")
 			handleDirect(client, v, fullArgs)
 		
+        case "scribd":
+            react(client, v.Info.Chat, v.Info.ID, "📑")
+            handleScribd(client, v, fullArgs)
+		
 		case "mega":
 			react(client, v.Info.Chat, v.Info.ID, "📥")
 			handleMega(client, v, fullArgs)
