@@ -376,24 +376,40 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			}
 
 			// c. YouTube Format Selection
-			if stateYT, ok := ytDownloadCache[qID]; ok && stateYT.BotLID == botID {
-				delete(ytDownloadCache, qID)
-				go handleYTDownload(client, v, stateYT.Url, bodyClean, (bodyClean == "8")) // 4 = Audio
-				return
-			}
+		// 🔥 1. YouTube Quality Selection
+		if stateYT, ok := ytDownloadCache[qID]; ok && stateYT.BotLID == botID {
+			delete(ytDownloadCache, qID)
+			// اگر یوزر نے 8 دبایا ہے تو وہ آڈیو ہے
+			go handleYTDownload(client, v, stateYT.Url, bodyClean, (bodyClean == "8"))
+			return
 		}
 
-		// 🔥 2. Archive Movie Selection
-		movieMutex.Lock()
-		_, isArchiveSearch := searchCache[senderID]
-		movieMutex.Unlock()
+		// 🔥 2. Archive / Movie Selection (Updated Variables)
+		archiveMutex.Lock()
+		_, isArchiveSearch := archiveCache[senderID] // نام تبدیل: searchCache -> archiveCache
+		archiveMutex.Unlock()
 
 		if isArchiveSearch {
+			// اگر یوزر نے نمبر بھیجا ہے
 			if _, err := strconv.Atoi(bodyClean); err == nil {
-				go handleArchive(client, v, bodyClean)
+				// یہاں ہم "download" موڈ بھیج رہے ہیں تاکہ وہ cache چیک کرے
+				go handleArchive(client, v, bodyClean, "download")
 				return
 			}
 		}
+
+		// 🔥 3. Libgen Book Selection (New Feature)
+		bookMutex.Lock()
+		_, isBookSearch := bookCache[senderID]
+		bookMutex.Unlock()
+
+		if isBookSearch {
+			if _, err := strconv.Atoi(bodyClean); err == nil {
+				go handleLibgen(client, v, bodyClean)
+				return
+			}
+		}
+
 
 		// 🔥 3. TikTok Format Selection
 		if _, ok := ttCache[senderID]; ok && !isCommand {

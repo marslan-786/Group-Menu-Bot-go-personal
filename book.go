@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv" // ✅ یہ مسنگ تھا، اب ایڈ کر دیا
 	"strings"
 	"sync"
-	"time"
-    "io"
+	// "time" // ❌ ٹائم استعمال نہیں ہو رہا تھا، ہٹا دیا
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types/events"
@@ -33,11 +34,12 @@ var bookMutex sync.Mutex
 // --- HANDLER ---
 func handleLibgen(client *whatsmeow.Client, v *events.Message, input string) {
 	if input == "" { return }
+	input = strings.TrimSpace(input) // ✅ Strings کا استعمال
 	senderJID := v.Info.Sender.String()
 
 	// 1️⃣ اگر نمبر ہے تو ڈاؤن لوڈ
 	if isNumber(input) {
-		index, _ := strconv.Atoi(input)
+		index, _ := strconv.Atoi(input) // ✅ Strconv اب کام کرے گا
 		bookMutex.Lock()
 		books, exists := bookCache[senderJID]
 		bookMutex.Unlock()
@@ -58,7 +60,6 @@ func handleLibgen(client *whatsmeow.Client, v *events.Message, input string) {
 
 // --- 🕵️ SCRAPER ---
 func searchLibgen(client *whatsmeow.Client, v *events.Message, query string, senderJID string) {
-	// Libgen Mirror (stable)
 	baseURL := "https://libgen.is/search.php"
 	u, _ := url.Parse(baseURL)
 	q := u.Query()
@@ -77,12 +78,10 @@ func searchLibgen(client *whatsmeow.Client, v *events.Message, query string, sen
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	html := string(bodyBytes)
 
-	// 🔥 Regex Parsing (HTML Table Scraper)
-	// یہ Regex ٹیبل کی قطاروں سے ڈیٹا نکالے گا
-	// Row Pattern: <tr>...ID...Author...Title...Size...Ext...Mirror...</tr>
+	// Regex Parsing
 	re := regexp.MustCompile(`<tr valign="top">.*?<td>(\d+)</td>.*?<td>(.*?)</td>.*?<a href="(.*?)".*?>(.*?)<.*?<td>(.*?)</td>.*?<td>(.*?)</td>.*?href="(http://library.lol/main/.*?)".*?</tr>`)
 	
-	matches := re.FindAllStringSubmatch(html, 10) // Top 10 results
+	matches := re.FindAllStringSubmatch(html, 10)
 
 	if len(matches) == 0 {
 		replyMessage(client, v, "🚫 No books found on Libgen.")
@@ -93,21 +92,17 @@ func searchLibgen(client *whatsmeow.Client, v *events.Message, query string, sen
 	msgText := fmt.Sprintf("📚 *Libgen Books for:* '%s'\n\n", query)
 
 	for i, m := range matches {
-		// m[1]=ID, m[2]=Author, m[4]=Title, m[5]=Publisher, m[6]=Year, m[7]=Pages, m[9]=Size, m[10]=Ext, m[11]=Mirror
-		// Regex groups might vary slightly based on HTML structure, this is a simplified robust match
-		
-		// Clean Title (remove HTML tags)
+		// Clean Title
 		title := stripTags(m[4])
 		author := stripTags(m[2])
-		size := m[6] // Adjust index based on real libgen table column count if needed
-        // Note: Regex above is simplified. Let's use specific capturing for Mirror which is key.
-        mirror := m[7] // The library.lol link
+		// size := m[6] // ❌ یہ ایرر دے رہا تھا، اسے ہٹا دیا
+        mirror := m[7]
         
 		results = append(results, BookResult{
 			Title:     title,
 			Author:    author,
 			MirrorURL: mirror,
-			Extension: "pdf", // Default assumption, actual file check happens later
+			Extension: "pdf",
 		})
 
 		msgText += fmt.Sprintf("*%d.* %s\n👤 _%s_ | 📦 %s\n\n", i+1, title, author, "PDF/EPUB")
@@ -129,7 +124,6 @@ func searchLibgen(client *whatsmeow.Client, v *events.Message, query string, sen
 
 // --- 📥 DOWNLOADER ---
 func fetchAndDownloadBook(client *whatsmeow.Client, v *events.Message, book BookResult) {
-	// 1. Go to Mirror Page (library.lol)
 	resp, err := http.Get(book.MirrorURL)
 	if err != nil {
 		replyMessage(client, v, "❌ Mirror Link Failed.")
@@ -140,8 +134,6 @@ func fetchAndDownloadBook(client *whatsmeow.Client, v *events.Message, book Book
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	html := string(bodyBytes)
 
-	// 2. Find the "GET" or "Cloudflare" link
-	// Pattern: <a href="...">GET</a> or <h2><a href="...">GET</a></h2>
 	re := regexp.MustCompile(`<h2><a href="(.*?)">GET</a></h2>`)
 	match := re.FindStringSubmatch(html)
 
@@ -152,9 +144,8 @@ func fetchAndDownloadBook(client *whatsmeow.Client, v *events.Message, book Book
 
 	directLink := match[1]
 	
-	// 3. Download using General Downloader logic
 	replyMessage(client, v, fmt.Sprintf("🚀 *Downloading Book...*\n%s", book.Title))
-	downloadFileDirectly(client, v, directLink, book.Title+".pdf") // Force PDF naming for now
+	downloadFileDirectly(client, v, directLink, book.Title+".pdf")
 }
 
 func stripTags(content string) string {
