@@ -954,7 +954,11 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			react(client, v.Info.Chat, v.Info.ID, "🐱")
 			handleGithub(client, v, fullArgs)
 		
-		case "dl", "download", "mega":
+		case "dl", "direct":
+			react(client, v.Info.Chat, v.Info.ID, "🔗")
+			handleDirect(client, v, fullArgs)
+		
+		case "mega":
 			react(client, v.Info.Chat, v.Info.ID, "📥")
 			handleMega(client, v, fullArgs)
 		}

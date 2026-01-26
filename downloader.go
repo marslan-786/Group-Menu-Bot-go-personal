@@ -370,7 +370,7 @@ func uploadToWhatsApp(client *whatsmeow.Client, v *events.Message, res DLResult,
 	// 90MB سے بڑی فائل ہمیشہ ڈاکومنٹ بنے گی
 	forceDoc := res.Size > 90*1024*1024
 
-	if mode == "audio" || forceDoc {
+	if mode == "audio" || mode == "document" || forceDoc {
 		mType = whatsmeow.MediaDocument
 	} else {
 		mType = whatsmeow.MediaVideo
@@ -926,4 +926,63 @@ func sendDocument(client *whatsmeow.Client, v *events.Message, docURL, name, mim
 			Mimetype: proto.String(mime), FileName: proto.String(name), FileLength: proto.Uint64(uint64(len(data))),
 		},
 	})
+}
+
+// 🌐 Universal / Direct Link Handler
+// 📂 DIRECT DOWNLOAD HANDLER (Clean & Fast)
+// 📂 CLEAN DIRECT DOWNLOADER
+func handleDirect(client *whatsmeow.Client, v *events.Message, link string) {
+	if link == "" {
+		replyMessage(client, v, "❌ *Error:* Link missing.")
+		return
+	}
+
+	// 1️⃣ کارڈ بھیجیں (صرف خوبصورتی کے لیے)
+	sendPremiumCard(client, v, "File Downloader", "Direct Link", "🚀 Downloading File...")
+
+	// 2️⃣ ڈاؤنلوڈ ریکویسٹ
+	resp, err := http.Get(link)
+	if err != nil {
+		replyMessage(client, v, "❌ Network Error.")
+		return
+	}
+	defer resp.Body.Close()
+
+	// 3️⃣ فائل کا نام (URL سے نکالنا)
+	filename := filepath.Base(resp.Request.URL.Path)
+	if filename == "" || filename == "." {
+		filename = "file_" + strconv.FormatInt(time.Now().Unix(), 10) + ".bin"
+	}
+	
+	// نام صاف کرنا (اگر ? وغیرہ ہو)
+	if idx := strings.Index(filename, "?"); idx != -1 {
+		filename = filename[:idx]
+	}
+
+	tempPath := fmt.Sprintf("temp_%d_%s", time.Now().Unix(), filename)
+
+	// 4️⃣ فائل محفوظ کریں
+	out, err := os.Create(tempPath)
+	if err != nil { return }
+	
+	size, err := io.Copy(out, resp.Body)
+	out.Close()
+
+	if err != nil {
+		os.Remove(tempPath)
+		replyMessage(client, v, "❌ Download Failed.")
+		return
+	}
+
+	// 5️⃣ سیدھا واٹس ایپ پر اپلوڈ (بطور ڈاکومنٹ)
+	// 'document' موڈ بھیج رہے ہیں تاکہ ہر فائل (ZIP, PDF, APK) صحیح جائے
+	uploadToWhatsApp(client, v, DLResult{
+		Path:  tempPath,
+		Title: filename,
+		Size:  size,
+		Mime:  "application/octet-stream",
+	}, "document")
+
+	// 6️⃣ صفائی
+	os.Remove(tempPath)
 }
