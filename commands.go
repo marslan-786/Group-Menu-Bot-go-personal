@@ -233,8 +233,6 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		return
 	}
 
-    // ... باقی کوڈ ویسا ہی رہنے دیں ...
-
 	// =========================================================
 	// 🛡️ 4. IMMEDIATE ANTI-BUG PROTECTION (Private Chats Only)
 	// =========================================================
@@ -264,8 +262,6 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 	doRead := data.AutoRead
 	doReact := data.AutoReact
 	dataMutex.RUnlock()
-
-    // ... اس کے نیچے باقی کوڈ (Goroutine Start وغیرہ) ویسا ہی رہے گا ...
 
 	// =========================================================================
 	// 🚀 GOROUTINE START (Background Tasks)
@@ -376,12 +372,12 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			}
 
 			// c. YouTube Format Selection
-		// 🔥 1. YouTube Quality Selection
-		if stateYT, ok := ytDownloadCache[qID]; ok && stateYT.BotLID == botID {
-			delete(ytDownloadCache, qID)
-			// اگر یوزر نے 8 دبایا ہے تو وہ آڈیو ہے
-			go handleYTDownload(client, v, stateYT.Url, bodyClean, (bodyClean == "8"))
-			return
+			if stateYT, ok := ytDownloadCache[qID]; ok && stateYT.BotLID == botID {
+				delete(ytDownloadCache, qID)
+				// اگر یوزر نے 8 دبایا ہے تو وہ آڈیو ہے
+				go handleYTDownload(client, v, stateYT.Url, bodyClean, (bodyClean == "8"))
+				return
+			}
 		}
 
 		// 🔥 2. Archive / Movie Selection (Updated Variables)
@@ -408,10 +404,9 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 				go handleLibgen(client, v, bodyClean)
 				return
 			}
-		}
+		} // ✅ Fixed Closing Bracket Here
 
-
-		// 🔥 3. TikTok Format Selection
+		// 🔥 4. TikTok Format Selection
 		if _, ok := ttCache[senderID]; ok && !isCommand {
 			if bodyClean == "1" || bodyClean == "2" || bodyClean == "3" {
 				handleTikTokReply(client, v, bodyClean, senderID)
@@ -419,7 +414,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			}
 		}
 
-		// 🔥 4. AI Contextual Reply
+		// 🔥 5. AI Contextual Reply
 		if !isCommand {
 			if handleAIReply(client, v) {
 				return
@@ -524,6 +519,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 
 		// 🔥 F. THE SWITCH (Commands Execution)
 		switch cmd {
+
 
 		// 🔥🔥🔥 NEW: AUTO AI COMMAND 🔥🔥🔥
 		case "autoai":
