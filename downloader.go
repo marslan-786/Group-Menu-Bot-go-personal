@@ -16,9 +16,6 @@ import (
 	"path/filepath"
 
 	"go.mau.fi/whatsmeow"
-	"github.com/chromedp/cdproto/network"
-	"github.com/chromedp/chromedp"
-	"github.com/chromedp/cdproto/runtime"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types/events"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
@@ -930,164 +927,55 @@ func sendDocument(client *whatsmeow.Client, v *events.Message, docURL, name, mim
 		},
 	})
 }
+
 func handleDirect(client *whatsmeow.Client, v *events.Message, link string) {
 	if link == "" {
 		replyMessage(client, v, "❌ *Error:* Link missing.")
 		return
 	}
 
-	sendPremiumCard(client, v, "Ultra Downloader", "Stealth Mode", "🚀 Launching Real Browser...")
+	// 1. کارڈ بھیجیں
+	sendPremiumCard(client, v, "Universal Downloader", "Powered by Python", "🚀 Bypassing Security & Downloading...")
 
-	var downloadURL = link
-	var cookies []*network.Cookie
+	// 2. Python Script چلائیں
+	// یہ بالکل yt-dlp والی ٹیکنیک ہے
+	cmd := exec.Command("python3", "browser_dl.py", link)
 	
-	// ---------------------------------------------------------
-	// ⚡ POWERFUL BROWSER SETUP (Always On)
-	// ---------------------------------------------------------
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true), 
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("enable-automation", false),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.WindowSize(1920, 1080),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
-	)
+	// آؤٹ پٹ پکڑیں
+	output, err := cmd.CombinedOutput()
+	result := strings.TrimSpace(string(output))
 
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
-	defer cancelAlloc()
-
-	ctx, cancelCtx := chromedp.NewContext(allocCtx)
-	defer cancelCtx()
-
-	ctx, cancelCtx = context.WithTimeout(ctx, 90*time.Second)
-	defer cancelCtx()
-
-	// 📺 CONSOLE LISTENER
-	chromedp.ListenTarget(ctx, func(ev interface{}) {
-		switch ev := ev.(type) {
-		case *runtime.EventConsoleAPICalled:
-			args := make([]string, len(ev.Args))
-			for i, arg := range ev.Args {
-				args[i] = string(arg.Value)
-			}
-			fmt.Printf("🖥️ [BROWSER CONSOLE] %s: %s\n", ev.Type, strings.Join(args, " "))
-		case *runtime.EventExceptionThrown:
-			fmt.Printf("🔥 [BROWSER EXCEPTION] %s\n", ev.ExceptionDetails.Text)
-		}
-	})
-
-	fmt.Println("🌍 Navigating to:", link)
-
-	// ---------------------------------------------------------
-	// 🚀 ACTIONS
-	// ---------------------------------------------------------
-	err := chromedp.Run(ctx,
-		network.Enable(),
-		chromedp.Navigate(link),
-		chromedp.Sleep(8*time.Second),
-
-		// 🔍 DOWNLOAD BUTTON SEARCH
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			var currentURL string
-			_ = chromedp.Location(&currentURL).Do(ctx)
-			fmt.Println("📍 Current Page:", currentURL)
-
-			if strings.HasSuffix(currentURL, ".apk") || strings.HasSuffix(currentURL, ".xapk") {
-				return nil
-			}
-
-			script := `
-				(function() {
-					let btn = document.querySelector('.download-btn') || 
-							  document.querySelector('a[href$=".apk"]') || 
-							  document.querySelector('a[href$=".xapk"]') ||
-							  Array.from(document.querySelectorAll('a')).find(el => el.textContent.toLowerCase().includes('download apk'));
-					
-					if (btn) {
-						console.log("✅ Button Found: " + btn.href);
-						btn.click();
-						return "clicked";
-					}
-					return "not_found";
-				})();
-			`
-			var res interface{}
-			_ = chromedp.Evaluate(script, &res).Do(ctx)
-			return nil
-		}),
-
-		chromedp.Sleep(5*time.Second),
-		chromedp.Location(&downloadURL),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			var err error
-			cookies, err = network.GetCookies().Do(ctx)
-			return err
-		}),
-	)
-
+	// 3. ایرر چیک کریں
 	if err != nil {
-		fmt.Println("❌ Browser Critical Error:", err)
-		replyMessage(client, v, fmt.Sprintf("❌ Browser Failed: %s", err.Error()))
+		// اگر پائتھون فیل ہوا تو لاگز پرنٹ کریں
+		fmt.Println("❌ Python Error Logs:", result)
+		replyMessage(client, v, "❌ Failed to download file via engine.")
 		return
 	}
 
-	// User Agent جو ہم نے براؤزر میں سیٹ کیا تھا
-	finalUserAgent := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-	fmt.Println("✅ Final URL to Download:", downloadURL)
+	// Python سکرپٹ آخری لائن میں فائل کا پاتھ دیتا ہے
+	lines := strings.Split(result, "\n")
+	filePath := strings.TrimSpace(lines[len(lines)-1])
 
-	// ---------------------------------------------------------
-	// 📥 DOWNLOAD WITH GO (Using Cookies)
-	// ---------------------------------------------------------
-	req, err := http.NewRequest("GET", downloadURL, nil)
-	if err != nil { return }
-
-	// ہیڈرز سیٹ کریں (اب ہمیں needBrowser چیک کرنے کی ضرورت نہیں کیونکہ یہ لازمی ہیں)
-	req.Header.Set("User-Agent", finalUserAgent)
-	var cookieList []string
-	for _, c := range cookies {
-		cookieList = append(cookieList, fmt.Sprintf("%s=%s", c.Name, c.Value))
-	}
-	req.Header.Set("Cookie", strings.Join(cookieList, "; "))
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		replyMessage(client, v, "❌ Network Error during download.")
-		return
-	}
-	defer resp.Body.Close()
-
-	if strings.Contains(resp.Header.Get("Content-Type"), "text/html") {
-		replyMessage(client, v, "❌ Error: Could not verify file (Still HTML).")
+	// 4. چیک کریں فائل موجود ہے؟
+	info, err := os.Stat(filePath)
+	if os.IsNotExist(err) {
+		replyMessage(client, v, "❌ Error: Python finished but file not found.")
 		return
 	}
 
-	filename := filepath.Base(resp.Request.URL.Path)
-	if idx := strings.Index(filename, "?"); idx != -1 { filename = filename[:idx] }
-	if filename == "" || filename == "." { filename = fmt.Sprintf("file_%d.bin", time.Now().Unix()) }
+	fmt.Println("✅ File Downloaded:", filePath)
 
-	tempPath := fmt.Sprintf("temp_%d_%s", time.Now().Unix(), filename)
-	out, err := os.Create(tempPath)
-	if err != nil { return }
-	
-	size, err := io.Copy(out, resp.Body)
-	out.Close()
-
-	if err != nil {
-		os.Remove(tempPath)
-		replyMessage(client, v, "❌ Download Failed.")
-		return
-	}
-
+	// 5. واٹس ایپ پر بھیجیں
 	uploadToWhatsApp(client, v, DLResult{
-		Path:  tempPath,
-		Title: filename,
-		Size:  size,
-		Mime:  resp.Header.Get("Content-Type"),
+		Path:  filePath,
+		Title: info.Name(),
+		Size:  info.Size(),
+		Mime:  "application/vnd.android.package-archive", // APK کے لیے
 	}, "document")
 
-	os.Remove(tempPath)
+	// 6. صفائی
+	os.Remove(filePath)
 }
 
 
