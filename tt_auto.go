@@ -41,65 +41,76 @@ var ttSearchCache = make(map[string]TTSearchSession)   // MessageID -> Results
 var autoStatusMap = make(map[string]*AutoStatusConfig) // UserID -> Config
 
 // 🔍 1. TIKTOK SEARCH (.tts query)
+// 🔍 1. TIKTOK SEARCH (.tts query)
 func handleTTSearch(client *whatsmeow.Client, v *events.Message, query string) {
 	if query == "" {
 		replyMessage(client, v, "⚠️ *Usage:* .tts funny\n_(Search TikTok Videos)_")
 		return
 	}
 
-	// 1. صرف ری ایکٹ کریں (کوئی ویٹنگ میسج نہیں)
 	react(client, v.Info.Chat, v.Info.ID, "🔍")
+	fmt.Printf("🚀 [GO] Starting Python Script for query: %s\n", query)
 
-	// 2. Python Script چلائیں
+	// Python Script چلائیں
 	cmd := exec.Command("python3", "tiktok_nav.py", query)
+	
+	// آؤٹ پٹ پکڑیں
 	output, err := cmd.CombinedOutput()
+	
+	// 🔥 HARD DEBUG PRINT (Raw Output)
+	fmt.Println("---------------------------------------------------")
+	fmt.Println("🐍 [PYTHON RAW OUTPUT START]")
+	fmt.Println(string(output))
+	fmt.Println("🐍 [PYTHON RAW OUTPUT END]")
+	fmt.Println("---------------------------------------------------")
 
-	// 3. رزلٹ چیک کریں
 	if err != nil {
-		fmt.Println("❌ Python Error:", err)
-		replyMessage(client, v, "❌ Search Failed (Script Error).")
+		fmt.Printf("❌ [GO] Execution Error: %v\n", err)
+		replyMessage(client, v, "❌ Search Failed (Script Error). Check Logs.")
 		return
 	}
 
-	// JSON Parse کریں
+	// JSON Parse کرنے کی کوشش کریں
+	// کبھی کبھی پائتھون ڈیبگ لاگز بھی پرنٹ کرتا ہے، ہمیں صرف آخری لائن چاہیے ہوتی ہے جو JSON ہو
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	lastLine := lines[len(lines)-1] // ہمیشہ آخری لائن JSON ہوتی ہے
+
 	var results []TTSearchItem
-	err = json.Unmarshal(output, &results)
+	jsonErr := json.Unmarshal([]byte(lastLine), &results)
 	
-	// اگر کوئی رزلٹ نہ ملے یا خالی ہو
-	if err != nil || len(results) == 0 {
+	if jsonErr != nil {
+		fmt.Printf("❌ [GO] JSON Parse Error: %v\n", jsonErr)
+		// اگر آخری لائن JSON نہیں تھی تو شاید پورا آؤٹ پٹ ٹرائی کریں
+		json.Unmarshal(output, &results)
+	}
+
+	if len(results) == 0 {
 		replyMessage(client, v, "❌ No results found on TikTok.")
 		return
 	}
 
-	// 4. کارڈ بنائیں (Direct Result)
+	// کارڈ بنائیں
 	menuText := fmt.Sprintf("🎵 *TIKTOK SEARCH: %s*\n\n", strings.ToUpper(query))
 	for i, item := range results {
-		// ٹائٹل کو چھوٹا کریں اگر بہت بڑا ہے
 		title := item.Title
-		if len(title) > 40 {
-			title = title[:37] + "..."
-		}
-		if title == "" {
-			title = "No Caption"
-		}
+		if len(title) > 40 { title = title[:37] + "..." }
+		if title == "" { title = "No Caption" }
 
 		menuText += fmt.Sprintf("【 %d 】 %s\n", i+1, title)
 	}
 	menuText += "\n🔢 *Reply with 1-10 to download.*"
 
-	// 5. مینیو بھیجیں
+	// مینیو بھیجیں
 	resp, err := client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		ExtendedTextMessage: &waProto.ExtendedTextMessage{Text: proto.String(menuText)},
 	})
 
-	// 6. کیش میں محفوظ کریں
 	if err == nil {
 		ttSearchCache[resp.ID] = TTSearchSession{
 			Results:  results,
 			SenderID: v.Info.Sender.User,
 		}
-
-		// 5 منٹ بعد کیش صاف
+		
 		go func() {
 			time.Sleep(5 * time.Minute)
 			delete(ttSearchCache, resp.ID)
