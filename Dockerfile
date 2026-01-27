@@ -24,6 +24,7 @@ RUN go mod init impossible-bot && \
     go get google.golang.org/protobuf/proto@latest && \
     go get github.com/showwin/speedtest-go && \
     go get google.golang.org/genai && \
+    go get github.com/chromedp/chromedp@latest && \
     go mod tidy
 
 RUN CGO_ENABLED=1 GOOS=linux go build -v -ldflags="-s -w" -o bot .
@@ -48,6 +49,7 @@ ENV PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y \
     ffmpeg imagemagick curl sqlite3 libsqlite3-0 \
+    chromium \     
     nodejs npm \
     atomicparsley \
     ca-certificates libgomp1 megatools libwebp-dev webp \
