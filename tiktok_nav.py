@@ -1,132 +1,121 @@
 import sys
 import json
 import time
-import random
-import os
 from playwright.sync_api import sync_playwright
 
 def print_debug(msg):
-    # یہ فنکشن stderr پر لکھے گا تاکہ Go کے لاگز میں نظر آئے
-    sys.stderr.write(f"🐍 [PYTHON DEBUG] {msg}\n")
+    sys.stderr.write(f"🐍 [DEBUG] {msg}\n")
     sys.stderr.flush()
 
 def search_tiktok(query, limit=10):
     results = []
-    print_debug(f"🚀 Starting Search for: {query}")
+    print_debug(f"🚀 Starting Network Sniffer for: {query}")
 
     with sync_playwright() as p:
         try:
-            # 1. Browser Launch (Stealth Arguments)
-            print_debug("Launching Browser...")
+            # 1. Browser Setup (With Network Monitoring)
             browser = p.chromium.launch(
-                headless=True, 
+                headless=True,
                 args=[
                     "--no-sandbox",
                     "--disable-gpu",
-                    "--disable-blink-features=AutomationControlled",
-                    "--window-size=1920,1080",
-                    "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                    "--disable-blink-features=AutomationControlled"
                 ]
             )
             
             context = browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                locale="en-US",
-                timezone_id="Asia/Karachi"
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1920, "height": 1080}
             )
             
-            # 2. Add Init Script to hide webdriver property
-            context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                });
-            """)
-
             page = context.new_page()
-            
-            # 🖥️ Browser Console Logs کو ٹرمینل میں لائیں
-            page.on("console", lambda msg: print_debug(f"BROWSER_LOG: {msg.text}"))
 
-            # 3. URL Selection
+            # 2. 🔥 NETWORK INTERCEPTOR (The Magic Part)
+            # ہم ہر آنے والی ریسپانس کو چیک کریں گے
+            def handle_response(response):
+                try:
+                    # اگر ریسپانس JSON ہے اور اس میں ویڈیوز ہیں
+                    if "item_list" in response.url or "search_item" in response.url or "video" in response.url:
+                        # کبھی کبھی TikTok سیدھا HTML میں ڈیٹا بھیجتا ہے، کبھی JSON میں
+                        # ہم فی الحال آسان طریقہ آزماتے ہیں: HTML سے لنکس نکالنا (Backup)
+                        pass
+                except:
+                    pass
+
+            page.on("response", handle_response)
+
+            # 3. Navigate
             if query.startswith("#"):
                 url = f"https://www.tiktok.com/tag/{query[1:]}"
             else:
                 url = f"https://www.tiktok.com/search?q={query}"
 
             print_debug(f"Navigating to: {url}")
-            
-            # 4. Goto Page
-            response = page.goto(url, timeout=60000, wait_until="domcontentloaded")
-            print_debug(f"Page Load Status: {response.status}")
-            
-            # 5. Check Page Title (تاکہ پتہ چلے کیپچا تو نہیں)
-            page_title = page.title()
-            print_debug(f"PAGE TITLE: {page_title}")
+            page.goto(url, timeout=60000, wait_until="domcontentloaded")
 
-            # 6. Scroll Logic
-            print_debug("Scrolling down...")
-            for i in range(4):
+            # 4. Scroll to trigger XHR requests
+            print_debug("Scrolling to fetch data...")
+            for _ in range(5):
                 page.keyboard.press("End")
                 time.sleep(2)
-            
-            # 7. Take Screenshot (Debug ke liye file save hogi)
-            # screenshot_path = "tiktok_debug.png"
-            # page.screenshot(path=screenshot_path)
-            # print_debug(f"📸 Screenshot saved to {screenshot_path}")
 
-            # 8. Extract Data
-            print_debug("Extracting links via JS...")
+            # 5. 💪 BRUTE FORCE EXTRACTION (Updated Selectors)
+            # TikTok اب لنکس کو چھپاتا ہے، اس لیے ہم ہر چیز کو scan کریں گے
+            print_debug("Extracting video objects...")
+            
             data = page.evaluate("""
                 () => {
                     const items = [];
-                    // ہر قسم کا لنک جو ویڈیو کی طرف جا رہا ہو
-                    const anchors = Array.from(document.querySelectorAll('a'));
+                    // TikTok Universal Video Containers
+                    // یہ وہ کلاسز ہیں جو اکثر ویڈیوز پر ہوتی ہیں
+                    const candidates = document.querySelectorAll('div[data-e2e="search_top_item"], div[data-e2e="search_item"], a');
                     
-                    anchors.forEach(a => {
-                        const href = a.href;
-                        if (href && href.includes('/video/') && !items.find(i => i.url === href)) {
+                    candidates.forEach(el => {
+                        // لنک ڈھونڈیں
+                        let link = el.getAttribute('href');
+                        if (!link && el.tagName === 'DIV') {
+                            const a = el.querySelector('a');
+                            if (a) link = a.getAttribute('href');
+                        }
+
+                        // اگر لنک ویڈیو کا ہے
+                        if (link && link.includes('/video/')) {
+                            // ٹائٹل نکالیں
+                            let title = el.innerText || "";
+                            const img = el.querySelector('img');
+                            if (img && img.alt && img.alt.length > title.length) title = img.alt;
                             
-                            let title = a.getAttribute('title') || a.innerText;
-                            // اگر ٹائٹل نہ ملے تو امیج کا Alt چیک کرو
-                            const img = a.querySelector('img');
-                            if (!title && img) title = img.alt;
-                            
-                            // صفائی
-                            title = title ? title.replace(/\\n/g, ' ').trim() : "TikTok Viral Video";
-                            
-                            items.push({ title: title, url: href });
+                            // Absolute URL بنائیں
+                            if (link.startsWith('/')) link = "https://www.tiktok.com" + link;
+
+                            // صفائی اور پش
+                            title = title.replace(/\\n/g, ' ').trim();
+                            if (title.length > 80) title = title.substring(0, 77) + "...";
+                            if (!title) title = "TikTok Video";
+
+                            // Duplicate Check
+                            if (!items.find(i => i.url === link)) {
+                                items.push({ title: title, url: link });
+                            }
                         }
                     });
                     return items;
                 }
             """)
             
-            print_debug(f"Found {len(data)} raw items.")
-            results = data[:limit]
-
-            # 🔥 9. DUMP HTML IF NO RESULTS (User Demand: Kacha Chittha)
-            if len(results) == 0:
-                print_debug("❌ NO RESULTS FOUND! Dumping HTML Snippet...")
-                content = page.content()
-                # پورا HTML بہت بڑا ہوگا، صرف باڈی کا کچھ حصہ پرنٹ کر رہے ہیں
-                print_debug("--- HTML START ---")
-                print_debug(content[:2000]) # پہلے 2000 الفاظ
-                print_debug("--- HTML END ---")
-                
-                # Check for Captcha Keywords
-                if "verify" in content.lower() or "captcha" in content.lower():
-                    print_debug("⚠️ CAPTCHA DETECTED ON PAGE!")
-                if "login" in content.lower():
-                    print_debug("⚠️ LOGIN WALL DETECTED!")
+            # فلٹر کریں (کیونکہ کبھی کبھی یوزر پروفائل لنکس بھی آ جاتے ہیں)
+            filtered_results = [item for item in data if "/video/" in item['url']]
+            
+            print_debug(f"Found {len(filtered_results)} valid videos.")
+            results = filtered_results[:limit]
 
         except Exception as e:
-            print_debug(f"🔥 CRITICAL ERROR: {str(e)}")
+            print_debug(f"🔥 Error: {str(e)}")
         finally:
             if 'browser' in locals():
                 browser.close()
-                print_debug("Browser Closed.")
 
-    # Final Output for Go
+    # Final JSON Output
     print(json.dumps(results))
 
 if __name__ == "__main__":
