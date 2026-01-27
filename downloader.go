@@ -940,50 +940,40 @@ func handleDirect(client *whatsmeow.Client, v *events.Message, link string) {
 
 	var downloadURL = link
 	var cookies []*network.Cookie
-	var userAgentString string
-	needBrowser := true // ہم رسک نہیں لیتے، سیدھا براؤزر چلاتے ہیں تاکہ Cloudflare بائی پاس ہو
-
+	
 	// ---------------------------------------------------------
-	// ⚡ POWERFUL BROWSER SETUP (Real User + Docker Fixes)
+	// ⚡ POWERFUL BROWSER SETUP (Always On)
 	// ---------------------------------------------------------
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		// 1. Docker Crash Fixes (یہ بہت ضروری ہیں)
-		chromedp.Flag("headless", true), // اگر ڈیبگ کرنا ہو تو اسے false کریں (لیکن ڈوکر میں true ہی رہے گا)
+		chromedp.Flag("headless", true), 
 		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true), // 👈 ERR_ABORTED کا علاج
+		chromedp.Flag("disable-dev-shm-usage", true),
 		chromedp.Flag("disable-gpu", true),
-
-		// 2. Real User Look (Anti-Detection)
 		chromedp.Flag("enable-automation", false),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"), // 👈 Bot کا ٹیگ ہٹاتا ہے
-		chromedp.WindowSize(1920, 1080), // 👈 موبائل نہیں، فل پی سی اسکرین
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.WindowSize(1920, 1080),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
 	)
 
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer cancelAlloc()
 
-	// لاگز کو پکڑنے کے لیے سیاق و سباق (Context)
 	ctx, cancelCtx := chromedp.NewContext(allocCtx)
 	defer cancelCtx()
 
-	ctx, cancelCtx = context.WithTimeout(ctx, 90*time.Second) // ٹائم بڑھا دیا
+	ctx, cancelCtx = context.WithTimeout(ctx, 90*time.Second)
 	defer cancelCtx()
 
-	// ---------------------------------------------------------
-	// 📺 CONSOLE LOG LISTENER (براؤزر کے اندر کیا ہو رہا ہے؟)
-	// ---------------------------------------------------------
+	// 📺 CONSOLE LISTENER
 	chromedp.ListenTarget(ctx, func(ev interface{}) {
 		switch ev := ev.(type) {
 		case *runtime.EventConsoleAPICalled:
-			// براؤزر کے کنسول کا ہر میسج یہاں پرنٹ ہوگا
 			args := make([]string, len(ev.Args))
 			for i, arg := range ev.Args {
 				args[i] = string(arg.Value)
 			}
 			fmt.Printf("🖥️ [BROWSER CONSOLE] %s: %s\n", ev.Type, strings.Join(args, " "))
 		case *runtime.EventExceptionThrown:
-			// اگر کوئی جاوا اسکرپٹ پھٹ جائے
 			fmt.Printf("🔥 [BROWSER EXCEPTION] %s\n", ev.ExceptionDetails.Text)
 		}
 	})
@@ -994,31 +984,22 @@ func handleDirect(client *whatsmeow.Client, v *events.Message, link string) {
 	// 🚀 ACTIONS
 	// ---------------------------------------------------------
 	err := chromedp.Run(ctx,
-		// نیٹ ورک کو فعال کریں تاکہ ہیڈرز دیکھ سکیں
 		network.Enable(),
-		
-		// لنک کھولیں
 		chromedp.Navigate(link),
-		
-		// تھوڑا انتظار (Cloudflare Verify کے لیے)
 		chromedp.Sleep(8*time.Second),
 
-		// 🔍 DOWNLOAD BUTTON SEARCH (Smart Logic)
+		// 🔍 DOWNLOAD BUTTON SEARCH
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			var currentURL string
 			_ = chromedp.Location(&currentURL).Do(ctx)
 			fmt.Println("📍 Current Page:", currentURL)
 
-			// اگر پہلے ہی فائل ہے تو کچھ نہ کریں
 			if strings.HasSuffix(currentURL, ".apk") || strings.HasSuffix(currentURL, ".xapk") {
 				return nil
 			}
 
-			// جاوا اسکرپٹ چلا کر ڈاؤن لوڈ بٹن ڈھونڈیں اور کلک کریں
-			// یہ سکرپٹ بہت ہیوی ہے، یہ ہر قسم کا ڈاؤن لوڈ بٹن ڈھونڈتی ہے
 			script := `
 				(function() {
-					// APKPure / Generic Download Buttons
 					let btn = document.querySelector('.download-btn') || 
 							  document.querySelector('a[href$=".apk"]') || 
 							  document.querySelector('a[href$=".xapk"]') ||
@@ -1034,30 +1015,26 @@ func handleDirect(client *whatsmeow.Client, v *events.Message, link string) {
 			`
 			var res interface{}
 			_ = chromedp.Evaluate(script, &res).Do(ctx)
-			fmt.Printf("🖱️ Button Click Status: %v\n", res)
-			
 			return nil
 		}),
 
-		// کلک کرنے کے بعد انتظار
 		chromedp.Sleep(5*time.Second),
-
-		// فائنل URL اور کوکیز اٹھائیں
 		chromedp.Location(&downloadURL),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			cookies, _ = network.GetCookies().Do(ctx)
-			return nil
+			var err error
+			cookies, err = network.GetCookies().Do(ctx)
+			return err
 		}),
 	)
 
 	if err != nil {
 		fmt.Println("❌ Browser Critical Error:", err)
-		// اگر ERR_ABORTED اب بھی آئے تو اس کا مطلب ڈوکر میں Chromium صحیح انسٹال نہیں
 		replyMessage(client, v, fmt.Sprintf("❌ Browser Failed: %s", err.Error()))
 		return
 	}
 
-	userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+	// User Agent جو ہم نے براؤزر میں سیٹ کیا تھا
+	finalUserAgent := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	fmt.Println("✅ Final URL to Download:", downloadURL)
 
 	// ---------------------------------------------------------
@@ -1066,20 +1043,53 @@ func handleDirect(client *whatsmeow.Client, v *events.Message, link string) {
 	req, err := http.NewRequest("GET", downloadURL, nil)
 	if err != nil { return }
 
-	req.Header.Set("User-Agent", userAgentString)
+	// ہیڈرز سیٹ کریں (اب ہمیں needBrowser چیک کرنے کی ضرورت نہیں کیونکہ یہ لازمی ہیں)
+	req.Header.Set("User-Agent", finalUserAgent)
 	var cookieList []string
 	for _, c := range cookies {
 		cookieList = append(cookieList, fmt.Sprintf("%s=%s", c.Name, c.Value))
 	}
 	req.Header.Set("Cookie", strings.Join(cookieList, "; "))
 
-	// باقی کوڈ وہی ہے (ڈاؤن لوڈ اور اپ لوڈ والا)...
-	// ...
-    // (یہاں آپ کا باقی Save اور Upload والا کوڈ آئے گا)
-    
-    // وقتی طور پر ٹیسٹ کے لیے:
-    replyMessage(client, v, "✅ Browser logic finished. Check logs.")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		replyMessage(client, v, "❌ Network Error during download.")
+		return
+	}
+	defer resp.Body.Close()
+
+	if strings.Contains(resp.Header.Get("Content-Type"), "text/html") {
+		replyMessage(client, v, "❌ Error: Could not verify file (Still HTML).")
+		return
+	}
+
+	filename := filepath.Base(resp.Request.URL.Path)
+	if idx := strings.Index(filename, "?"); idx != -1 { filename = filename[:idx] }
+	if filename == "" || filename == "." { filename = fmt.Sprintf("file_%d.bin", time.Now().Unix()) }
+
+	tempPath := fmt.Sprintf("temp_%d_%s", time.Now().Unix(), filename)
+	out, err := os.Create(tempPath)
+	if err != nil { return }
+	
+	size, err := io.Copy(out, resp.Body)
+	out.Close()
+
+	if err != nil {
+		os.Remove(tempPath)
+		replyMessage(client, v, "❌ Download Failed.")
+		return
+	}
+
+	uploadToWhatsApp(client, v, DLResult{
+		Path:  tempPath,
+		Title: filename,
+		Size:  size,
+		Mime:  resp.Header.Get("Content-Type"),
+	}, "document")
+
+	os.Remove(tempPath)
 }
+
 
 // 📚 SCRIBD HANDLER (Using scribd-dl Python Tool)
 func handleScribd(client *whatsmeow.Client, v *events.Message, link string) {
