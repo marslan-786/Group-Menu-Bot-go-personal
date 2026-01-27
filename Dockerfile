@@ -50,6 +50,7 @@ ENV PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y \
     ffmpeg imagemagick curl sqlite3 libsqlite3-0 \
     chromium \     
+    fonts-liberation libasound2 libnspr4 libnss3 \
     nodejs npm \
     atomicparsley \
     ca-certificates libgomp1 megatools libwebp-dev webp \
