@@ -356,7 +356,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 				return
 			}
 			
-			// b. YouTube Search Selection (FIXED 🚀)
+			// b. YouTube Search Selection
 			if session, ok := ytCache[qID]; ok {
 				if strings.Contains(senderID, session.SenderID) || session.SenderID == v.Info.Sender.User {
 					delete(ytCache, qID)
@@ -370,8 +370,15 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 					return
 				}
 			}
+			
+			// 🔥 c. TikTok Search Selection (NEW FIX ADDED HERE)
+			if _, ok := ttSearchCache[qID]; ok {
+				// یہ چیک کرے گا کہ کیا یوزر 1-10 بھیج رہا ہے اور پھر ڈاؤن لوڈ کرے گا
+				handleTTSearchReply(client, v, bodyClean, qID)
+				return
+			}
 
-			// c. YouTube Format Selection
+			// d. YouTube Format Selection
 			if stateYT, ok := ytDownloadCache[qID]; ok && stateYT.BotLID == botID {
 				delete(ytDownloadCache, qID)
 				// اگر یوزر نے 8 دبایا ہے تو وہ آڈیو ہے
@@ -380,21 +387,19 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 			}
 		}
 
-		// 🔥 2. Archive / Movie Selection (Updated Variables)
+		// 🔥 2. Archive / Movie Selection
 		archiveMutex.Lock()
-		_, isArchiveSearch := archiveCache[senderID] // نام تبدیل: searchCache -> archiveCache
+		_, isArchiveSearch := archiveCache[senderID]
 		archiveMutex.Unlock()
 
 		if isArchiveSearch {
-			// اگر یوزر نے نمبر بھیجا ہے
 			if _, err := strconv.Atoi(bodyClean); err == nil {
-				// یہاں ہم "download" موڈ بھیج رہے ہیں تاکہ وہ cache چیک کرے
 				go handleArchive(client, v, bodyClean, "download")
 				return
 			}
 		}
 
-		// 🔥 3. Libgen Book Selection (New Feature)
+		// 🔥 3. Libgen Book Selection
 		bookMutex.Lock()
 		_, isBookSearch := bookCache[senderID]
 		bookMutex.Unlock()
@@ -404,9 +409,9 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 				go handleLibgen(client, v, bodyClean)
 				return
 			}
-		} // ✅ Fixed Closing Bracket Here
+		}
 
-		// 🔥 4. TikTok Format Selection
+		// 🔥 4. TikTok Format Selection (Old Logic - 1,2,3 Menu)
 		if _, ok := ttCache[senderID]; ok && !isCommand {
 			if bodyClean == "1" || bodyClean == "2" || bodyClean == "3" {
 				handleTikTokReply(client, v, bodyClean, senderID)
@@ -519,6 +524,7 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 
 		// 🔥 F. THE SWITCH (Commands Execution)
 		switch cmd {
+
 
 
 		// 🔥🔥🔥 NEW: AUTO AI COMMAND 🔥🔥🔥
@@ -980,7 +986,18 @@ func processMessage(client *whatsmeow.Client, v *events.Message) {
 		case "dl", "direct":
 			react(client, v.Info.Chat, v.Info.ID, "🔗")
 			handleDirect(client, v, fullArgs)
-		
+		case "tts":
+    // 🔍 Search
+            handleTTSearch(client, v, fullArgs)
+
+        case "ttauto":
+    // 🤖 Auto Toggle
+            handleTTAuto(client, v, args)
+
+        case "ttautoset":
+    // 🏷️ Set Tags
+            handleTTAutoSet(client, v, args)
+    
 		case "mega":
 			react(client, v.Info.Chat, v.Info.ID, "📥")
 			handleMega(client, v, fullArgs)

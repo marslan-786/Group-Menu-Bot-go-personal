@@ -86,6 +86,7 @@ COPY --from=node-builder /app/package.json ./package.json
 COPY web ./web
 COPY pic.png ./pic.png
 COPY ai_engine.py ./ai_engine.py
+COPY tiktok_nav.py ./tiktok_nav.py
 # 👇 Python والا نیا براؤزر سکرپٹ یہاں کاپی ہو رہا ہے
 COPY browser_dl.py ./browser_dl.py
 
