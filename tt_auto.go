@@ -196,6 +196,7 @@ func StartAutoStatusLoop(client *whatsmeow.Client) {
 }
 
 // ایک یوزر کے لیے اسٹیٹس لگانے کا عمل
+// ایک یوزر کے لیے اسٹیٹس لگانے کا عمل
 func runSingleAutoStatusCheck(client *whatsmeow.Client, userID string) {
 	config := autoStatusMap[userID]
 	if config == nil || !config.Enabled { return }
@@ -212,9 +213,7 @@ func runSingleAutoStatusCheck(client *whatsmeow.Client, userID string) {
 	
 	if len(results) == 0 { return }
 
-	// رینڈم ویڈیو اٹھائیں تاکہ ہر بار پہلی والی نہ لگے
-	// یا ہم sequence بھی رکھ سکتے ہیں
-	import "math/rand"
+	// 🛠️ FIX: یہاں سے 'import' والی لائن ہٹا دی گئی ہے
 	randomIndex := rand.Intn(len(results))
 	video := results[randomIndex]
 
