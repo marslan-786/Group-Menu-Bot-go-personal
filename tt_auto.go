@@ -18,7 +18,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-
 // 📦 TikTok Search Result Structure
 type TTSearchItem struct {
 	Title string `json:"title"`
@@ -34,13 +33,12 @@ type TTSearchSession struct {
 type AutoStatusConfig struct {
 	Enabled   bool
 	Tags      string // e.g., "funny"
-	LastIndex int    // ٹریک رکھنے کے لیے کہ کون سی ویڈیو لگائی تھی (optional logic)
+	LastIndex int    // ٹریک رکھنے کے لیے
 }
 
 // 💾 Global Maps (In-Memory Database)
-var ttSearchCache = make(map[string]TTSearchSession) // MessageID -> Results
+var ttSearchCache = make(map[string]TTSearchSession)   // MessageID -> Results
 var autoStatusMap = make(map[string]*AutoStatusConfig) // UserID -> Config
-
 
 // 🔍 1. TIKTOK SEARCH (.tts query)
 func handleTTSearch(client *whatsmeow.Client, v *events.Message, query string) {
@@ -55,7 +53,7 @@ func handleTTSearch(client *whatsmeow.Client, v *events.Message, query string) {
 	// Python Script چلائیں
 	cmd := exec.Command("python3", "tiktok_nav.py", query)
 	output, err := cmd.CombinedOutput()
-	
+
 	if err != nil {
 		fmt.Println("❌ Python Error:", err)
 		replyMessage(client, v, "❌ Search Failed (Script Error).")
@@ -75,25 +73,29 @@ func handleTTSearch(client *whatsmeow.Client, v *events.Message, query string) {
 	for i, item := range results {
 		// ٹائٹل کو چھوٹا کریں اگر بہت بڑا ہے
 		title := item.Title
-		if len(title) > 40 { title = title[:37] + "..." }
-		if title == "" { title = "No Caption" }
+		if len(title) > 40 {
+			title = title[:37] + "..."
+		}
+		if title == "" {
+			title = "No Caption"
+		}
 
 		menuText += fmt.Sprintf("【 %d 】 %s\n", i+1, title)
 	}
 	menuText += "\n🔢 *Reply with 1-10 to download.*"
 
 	// مینیو بھیجیں
-	resp, _ := client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
+	resp, err := client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		ExtendedTextMessage: &waProto.ExtendedTextMessage{Text: proto.String(menuText)},
 	})
 
-	// کیش میں محفوظ کریں (تاکہ رپلائی پر ڈاؤن لوڈ کر سکیں)
-	if resp != nil {
+	// 🛠️ ERROR FIX: resp != nil کی جگہ err == nil چیک کریں
+	if err == nil {
 		ttSearchCache[resp.ID] = TTSearchSession{
 			Results:  results,
 			SenderID: v.Info.Sender.User,
 		}
-		
+
 		// 5 منٹ بعد کیش صاف
 		go func() {
 			time.Sleep(5 * time.Minute)
@@ -103,13 +105,16 @@ func handleTTSearch(client *whatsmeow.Client, v *events.Message, query string) {
 }
 
 // 📥 2. TIKTOK SEARCH REPLY HANDLER
-// اسے آپ اپنے main switch case کے default سیکشن میں کال کریں گے جہاں replies ہینڈل ہوتے ہیں
 func handleTTSearchReply(client *whatsmeow.Client, v *events.Message, choice string, quotedID string) {
 	session, exists := ttSearchCache[quotedID]
-	if !exists { return } // اگر کیش میں نہیں ہے تو اگنور
+	if !exists {
+		return
+	}
 
 	// Sender Check
-	if v.Info.Sender.User != session.SenderID { return }
+	if v.Info.Sender.User != session.SenderID {
+		return
+	}
 
 	index, err := strconv.Atoi(strings.TrimSpace(choice))
 	if err != nil || index < 1 || index > len(session.Results) {
@@ -118,23 +123,20 @@ func handleTTSearchReply(client *whatsmeow.Client, v *events.Message, choice str
 	}
 
 	selectedVideo := session.Results[index-1]
-	
+
 	// ڈاؤن لوڈ شروع
 	react(client, v.Info.Chat, v.Info.ID, "⬇️")
 	sendPremiumCard(client, v, "TikTok Downloader", "Auto-Engine", "🎬 Downloading: "+selectedVideo.Title)
-	
-	// ہمارا پرانا downloadAndSend فنکشن استعمال کریں (یہ yt-dlp کے ذریعے بیسٹ کوالٹی اٹھا لے گا)
+
+	// ہمارا پرانا downloadAndSend فنکشن استعمال کریں
 	go downloadAndSend(client, v, selectedVideo.Url, "video")
-	
+
 	// مینیو ڈیلیٹ کر دیں (صفائی)
 	delete(ttSearchCache, quotedID)
 }
 
 // ⚙️ 3. AUTO STATUS SETUP (.ttauto / .ttautoset)
 func handleTTAuto(client *whatsmeow.Client, v *events.Message, args []string) {
-	// صرف اونر کے لیے (اگر چاہیں تو ایڈمن کے لیے بھی کھول دیں)
-	// if !isOwner(client, v.Info.Sender) { return }
-
 	senderID := v.Info.Sender.User
 	if len(args) == 0 {
 		replyMessage(client, v, "⚠️ Usage: .ttauto on | off")
@@ -142,7 +144,7 @@ func handleTTAuto(client *whatsmeow.Client, v *events.Message, args []string) {
 	}
 
 	mode := strings.ToLower(args[0])
-	
+
 	// کنفیگ نکالیں یا نئی بنائیں
 	config, exists := autoStatusMap[senderID]
 	if !exists {
@@ -152,10 +154,10 @@ func handleTTAuto(client *whatsmeow.Client, v *events.Message, args []string) {
 
 	if mode == "on" || mode == "enable" {
 		config.Enabled = true
-		replyMessage(client, v, fmt.Sprintf("✅ *Auto-Status ENABLED!*\n🏷️ Tag: #%s\n⏳ Bot will upload videos automatically.", config.Tags))
-		
-		// اگر لوپ نہیں چل رہا تو پہلی بار چلا دیں (یا گلوبل ٹائمر پر چھوڑ دیں)
-		go runSingleAutoStatusCheck(client, senderID) 
+		replyMessage(client, v, fmt.Sprintf("✅ *Auto-Status ENABLED!*\n🏷️ Tag: #%s\n⏳ Bot will upload 5 videos every cycle.", config.Tags))
+
+		// پہلی بار فوراً چلائیں
+		go runSingleAutoStatusCheck(client, senderID)
 
 	} else {
 		config.Enabled = false
@@ -171,21 +173,20 @@ func handleTTAutoSet(client *whatsmeow.Client, v *events.Message, args []string)
 	}
 
 	tags := strings.Join(args, " ")
-	
+
 	config, exists := autoStatusMap[senderID]
 	if !exists {
 		config = &AutoStatusConfig{Enabled: false}
 		autoStatusMap[senderID] = config
 	}
-	
+
 	config.Tags = tags
 	replyMessage(client, v, fmt.Sprintf("✅ *Auto-Tags Updated:*\n🏷️ #%s", tags))
 }
 
 // 🔄 4. AUTO STATUS WORKER (Background Loop)
-// یہ فنکشن آپ کو main.go میں ایک بار 'go StartAutoStatusLoop(client)' کر کے چلانا ہوگا
 func StartAutoStatusLoop(client *whatsmeow.Client) {
-	ticker := time.NewTicker(45 * time.Minute) // ہر 45 منٹ بعد چیک کرے گا
+	ticker := time.NewTicker(5 * time.Minute) // ہر 45 منٹ بعد چیک کرے گا
 	for range ticker.C {
 		for userID, config := range autoStatusMap {
 			if config.Enabled {
@@ -195,60 +196,89 @@ func StartAutoStatusLoop(client *whatsmeow.Client) {
 	}
 }
 
-// ایک یوزر کے لیے اسٹیٹس لگانے کا عمل
-// ایک یوزر کے لیے اسٹیٹس لگانے کا عمل
+// 🔄 5. RUN STATUS CHECK (Updated: Posts 5 Random Videos)
 func runSingleAutoStatusCheck(client *whatsmeow.Client, userID string) {
 	config := autoStatusMap[userID]
-	if config == nil || !config.Enabled { return }
+	if config == nil || !config.Enabled {
+		return
+	}
 
 	fmt.Printf("🤖 [AUTO-STATUS] Running for %s | Tag: %s\n", userID, config.Tags)
 
-	// 1. Python سے ایک ویڈیو لنک لیں
+	// 1. Python سے ویڈیوز کی لسٹ منگوائیں
 	cmd := exec.Command("python3", "tiktok_nav.py", "#"+config.Tags)
 	output, err := cmd.CombinedOutput()
-	if err != nil { return }
+	if err != nil {
+		return
+	}
 
 	var results []TTSearchItem
 	json.Unmarshal(output, &results)
-	
-	if len(results) == 0 { return }
 
-	// 🛠️ FIX: یہاں سے 'import' والی لائن ہٹا دی گئی ہے
-	randomIndex := rand.Intn(len(results))
-	video := results[randomIndex]
-
-	// 2. ڈاؤن لوڈ کریں
-	filename := fmt.Sprintf("autostatus_%d.mp4", time.Now().Unix())
-	
-	// yt-dlp کے ذریعے ڈاؤن لوڈ
-	dlCmd := exec.Command("yt-dlp", "-o", filename, video.Url)
-	if err := dlCmd.Run(); err != nil { return }
-
-	// 3. اسٹیٹس پر اپلوڈ کریں (JID: status@broadcast)
-	fileData, err := os.ReadFile(filename)
-	if err == nil {
-		uploaded, err := client.Upload(context.Background(), fileData, whatsmeow.MediaVideo)
-		if err == nil {
-			msg := &waProto.Message{
-				VideoMessage: &waProto.VideoMessage{
-					URL:           proto.String(uploaded.URL),
-					DirectPath:    proto.String(uploaded.DirectPath),
-					MediaKey:      uploaded.MediaKey,
-					Mimetype:      proto.String("video/mp4"),
-					FileEncSHA256: uploaded.FileEncSHA256,
-					FileSHA256:    uploaded.FileSHA256,
-					FileLength:    proto.Uint64(uploaded.FileLength),
-					Caption:       proto.String(fmt.Sprintf("🤖 Auto Post: %s\n🏷️ #%s", video.Title, config.Tags)),
-				},
-			}
-			
-			// ⚡ STATUS JID
-			statusJID := types.JID{User: "status", Server: "broadcast"}
-			client.SendMessage(context.Background(), statusJID, msg)
-			fmt.Println("✅ [AUTO-STATUS] Posted successfully!")
-		}
+	// اگر ویڈیوز نہیں ملیں تو واپسی
+	if len(results) == 0 {
+		return
 	}
 
-	// صفائی
-	os.Remove(filename)
+	// 2. لسٹ کو شفل (Mix) کریں تاکہ ہر بار مختلف ویڈیوز آئیں
+	rand.Shuffle(len(results), func(i, j int) {
+		results[i], results[j] = results[j], results[i]
+	})
+
+	// 3. فیصلہ کریں کتنی ویڈیوز لگانی ہیں (زیادہ سے زیادہ 5)
+	limit := 5
+	if len(results) < 5 {
+		limit = len(results)
+	}
+
+	fmt.Printf("📦 [BATCH] Posting %d videos to status...\n", limit)
+
+	// 4. لوپ چلائیں (5 بار)
+	for i := 0; i < limit; i++ {
+		video := results[i]
+
+		// فائل کا نام یونیک رکھیں
+		filename := fmt.Sprintf("autostatus_%s_%d.mp4", userID, time.Now().UnixNano())
+
+		// A. ڈاؤن لوڈ کریں
+		dlCmd := exec.Command("yt-dlp", "-o", filename, video.Url)
+		if err := dlCmd.Run(); err != nil {
+			fmt.Println("❌ Skip: Download failed for", video.Title)
+			continue // اگر ایک فیل ہو تو اگلی پر جائیں
+		}
+
+		// B. اسٹیٹس پر اپلوڈ کریں
+		fileData, err := os.ReadFile(filename)
+		if err == nil {
+			uploaded, err := client.Upload(context.Background(), fileData, whatsmeow.MediaVideo)
+			if err == nil {
+				msg := &waProto.Message{
+					VideoMessage: &waProto.VideoMessage{
+						URL:           proto.String(uploaded.URL),
+						DirectPath:    proto.String(uploaded.DirectPath),
+						MediaKey:      uploaded.MediaKey,
+						Mimetype:      proto.String("video/mp4"),
+						FileEncSHA256: uploaded.FileEncSHA256,
+						FileSHA256:    uploaded.FileSHA256,
+						FileLength:    proto.Uint64(uploaded.FileLength),
+						// کیپشن میں ہیش ٹیگ اور ویڈیو نمبر
+						Caption: proto.String(fmt.Sprintf("🤖 Auto Post [%d/5]\n🏷️ #%s\n📝 %s", i+1, config.Tags, video.Title)),
+					},
+				}
+
+				// ⚡ STATUS JID
+				statusJID := types.JID{User: "status", Server: "broadcast"}
+				client.SendMessage(context.Background(), statusJID, msg)
+				fmt.Printf("✅ [POSTED] Video %d/%d: %s\n", i+1, limit, video.Title)
+			}
+		}
+
+		// C. صفائی اور وقفہ
+		os.Remove(filename)
+
+		// ⚠️ تھوڑا انتظار (15 سیکنڈ) تاکہ واٹس ایپ سپیم نہ سمجھے
+		if i < limit-1 {
+			time.Sleep(15 * time.Second)
+		}
+	}
 }
