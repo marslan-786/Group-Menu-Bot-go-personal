@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 
 	"go.mau.fi/whatsmeow"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/chromedp"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types/events"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
