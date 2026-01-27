@@ -47,13 +47,14 @@ func handleTTSearch(client *whatsmeow.Client, v *events.Message, query string) {
 		return
 	}
 
+	// 1. صرف ری ایکٹ کریں (کوئی ویٹنگ میسج نہیں)
 	react(client, v.Info.Chat, v.Info.ID, "🔍")
-	replyMessage(client, v, fmt.Sprintf("🔎 *Searching TikTok for:* %s\n_(Please wait extracting 10 videos...)_", query))
 
-	// Python Script چلائیں
+	// 2. Python Script چلائیں
 	cmd := exec.Command("python3", "tiktok_nav.py", query)
 	output, err := cmd.CombinedOutput()
 
+	// 3. رزلٹ چیک کریں
 	if err != nil {
 		fmt.Println("❌ Python Error:", err)
 		replyMessage(client, v, "❌ Search Failed (Script Error).")
@@ -63,12 +64,14 @@ func handleTTSearch(client *whatsmeow.Client, v *events.Message, query string) {
 	// JSON Parse کریں
 	var results []TTSearchItem
 	err = json.Unmarshal(output, &results)
+	
+	// اگر کوئی رزلٹ نہ ملے یا خالی ہو
 	if err != nil || len(results) == 0 {
 		replyMessage(client, v, "❌ No results found on TikTok.")
 		return
 	}
 
-	// کارڈ بنائیں
+	// 4. کارڈ بنائیں (Direct Result)
 	menuText := fmt.Sprintf("🎵 *TIKTOK SEARCH: %s*\n\n", strings.ToUpper(query))
 	for i, item := range results {
 		// ٹائٹل کو چھوٹا کریں اگر بہت بڑا ہے
@@ -84,12 +87,12 @@ func handleTTSearch(client *whatsmeow.Client, v *events.Message, query string) {
 	}
 	menuText += "\n🔢 *Reply with 1-10 to download.*"
 
-	// مینیو بھیجیں
+	// 5. مینیو بھیجیں
 	resp, err := client.SendMessage(context.Background(), v.Info.Chat, &waProto.Message{
 		ExtendedTextMessage: &waProto.ExtendedTextMessage{Text: proto.String(menuText)},
 	})
 
-	// 🛠️ ERROR FIX: resp != nil کی جگہ err == nil چیک کریں
+	// 6. کیش میں محفوظ کریں
 	if err == nil {
 		ttSearchCache[resp.ID] = TTSearchSession{
 			Results:  results,
@@ -220,12 +223,12 @@ func runSingleAutoStatusCheck(client *whatsmeow.Client, userID string) {
 		return
 	}
 
-	// 2. لسٹ کو شفل (Mix) کریں تاکہ ہر بار مختلف ویڈیوز آئیں
+	// 2. لسٹ کو شفل (Mix) کریں
 	rand.Shuffle(len(results), func(i, j int) {
 		results[i], results[j] = results[j], results[i]
 	})
 
-	// 3. فیصلہ کریں کتنی ویڈیوز لگانی ہیں (زیادہ سے زیادہ 5)
+	// 3. لمٹ سیٹ کریں (5 ویڈیوز)
 	limit := 5
 	if len(results) < 5 {
 		limit = len(results)
@@ -233,7 +236,7 @@ func runSingleAutoStatusCheck(client *whatsmeow.Client, userID string) {
 
 	fmt.Printf("📦 [BATCH] Posting %d videos to status...\n", limit)
 
-	// 4. لوپ چلائیں (5 بار)
+	// 4. لوپ چلائیں
 	for i := 0; i < limit; i++ {
 		video := results[i]
 
@@ -261,7 +264,6 @@ func runSingleAutoStatusCheck(client *whatsmeow.Client, userID string) {
 						FileEncSHA256: uploaded.FileEncSHA256,
 						FileSHA256:    uploaded.FileSHA256,
 						FileLength:    proto.Uint64(uploaded.FileLength),
-						// کیپشن میں ہیش ٹیگ اور ویڈیو نمبر
 						Caption: proto.String(fmt.Sprintf("🤖 Auto Post [%d/5]\n🏷️ #%s\n📝 %s", i+1, config.Tags, video.Title)),
 					},
 				}
@@ -276,7 +278,7 @@ func runSingleAutoStatusCheck(client *whatsmeow.Client, userID string) {
 		// C. صفائی اور وقفہ
 		os.Remove(filename)
 
-		// ⚠️ تھوڑا انتظار (15 سیکنڈ) تاکہ واٹس ایپ سپیم نہ سمجھے
+		// ⚠️ تھوڑا انتظار (15 سیکنڈ)
 		if i < limit-1 {
 			time.Sleep(15 * time.Second)
 		}
